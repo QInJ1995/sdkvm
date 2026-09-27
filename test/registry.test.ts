@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installUseHint } from '../src/cli/install.js';
 import { findInstalled, listInstalled } from '../src/core/registry.js';
+import {
+  parseFlutterVersion,
+  parseMavenVersion,
+  parseNodeVersion,
+  parsePythonVersion,
+  parseVersion,
+} from '../src/core/version.js';
 import { SdkvmError } from '../src/util/errors.js';
 
 let home: string;
@@ -60,11 +68,21 @@ describe('registry', () => {
     expect(findInstalled('java', 'lts').version.major).toBe(21);
   });
 
-  it('node lts matches even majors, not Java LTS set', () => {
+  it('node lts matches even majors that have entered LTS, not a Current even major', () => {
     fs.mkdirSync(path.join(home, 'nodes', 'nodejs-22.20.0'), { recursive: true });
     fs.mkdirSync(path.join(home, 'nodes', 'nodejs-21.0.0'), { recursive: true });
     fs.mkdirSync(path.join(home, 'nodes', 'nodejs-24.2.0'), { recursive: true });
-    expect(findInstalled('node', 'lts').dirPath.endsWith('nodejs-24.2.0')).toBe(true);
+    fs.mkdirSync(path.join(home, 'nodes', 'nodejs-26.1.0'), { recursive: true });
+    vi.useFakeTimers();
+    try {
+      // 2026-09：26 仍是 Current（10 月才进 LTS），24 已经是 LTS
+      vi.setSystemTime(new Date('2026-09-27T00:00:00Z'));
+      expect(findInstalled('node', 'lts').dirPath.endsWith('nodejs-24.2.0')).toBe(true);
+      vi.setSystemTime(new Date('2026-10-01T00:00:00Z'));
+      expect(findInstalled('node', 'lts').dirPath.endsWith('nodejs-26.1.0')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('go lts is rejected', () => {
@@ -92,6 +110,30 @@ describe('registry', () => {
     expect(findInstalled('python', '3.12').dirPath.endsWith('cpython-3.12.7')).toBe(true);
     expect(findInstalled('python', '3.14.0rc2').dirPath.endsWith('cpython-3.14.0rc2')).toBe(true);
     expect(() => findInstalled('python', '3.14')).toThrow(SdkvmError);
+  });
+
+  it('maven and flutter loose specs skip an installed prerelease', () => {
+    fs.mkdirSync(path.join(home, 'mavens', 'maven-4.0.0'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'mavens', 'maven-4.0.0-rc-4'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'flutters', 'flutter-3.49.0'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'flutters', 'flutter-3.49.0-0.1.pre'), { recursive: true });
+    expect(findInstalled('maven', 'latest').dirPath.endsWith('maven-4.0.0')).toBe(true);
+    expect(findInstalled('maven', '4').dirPath.endsWith('maven-4.0.0')).toBe(true);
+    expect(findInstalled('maven', '4.0').dirPath.endsWith('maven-4.0.0')).toBe(true);
+    expect(findInstalled('maven', '4.0.0-rc-4').dirPath.endsWith('maven-4.0.0-rc-4')).toBe(true);
+    expect(findInstalled('flutter', 'latest').dirPath.endsWith('flutter-3.49.0')).toBe(true);
+    expect(findInstalled('flutter', '3.49').dirPath.endsWith('flutter-3.49.0')).toBe(true);
+    expect(findInstalled('flutter', '3.49.0-0.1.pre').dirPath.endsWith('flutter-3.49.0-0.1.pre')).toBe(true);
+  });
+
+  it('install hint uses the full version for a prerelease', () => {
+    expect(installUseHint('python', parsePythonVersion('cpython', '3.14.0rc2'))).toBe('3.14.0rc2');
+    expect(installUseHint('python', parsePythonVersion('cpython', '3.12.7'))).toBe('3.12');
+    expect(installUseHint('maven', parseMavenVersion('maven', '4.0.0-rc-4'))).toBe('4.0.0-rc-4');
+    expect(installUseHint('maven', parseMavenVersion('maven', '3.9.9'))).toBe('3.9');
+    expect(installUseHint('flutter', parseFlutterVersion('flutter', '3.49.0-0.1.pre'))).toBe('3.49.0-0.1.pre');
+    expect(installUseHint('java', parseVersion('temurin', '21.0.5+11'))).toBe('21');
+    expect(installUseHint('node', parseNodeVersion('nodejs', '22.20.0'))).toBe('22');
   });
 
   it('python line and latest prefer the final release over a prerelease of the same numbers', () => {

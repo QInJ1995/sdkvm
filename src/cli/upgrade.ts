@@ -8,6 +8,7 @@ import { detectPlatform } from '../core/platform.js';
 import { downloadFile } from '../net/download.js';
 import { httpText } from '../net/http.js';
 import { extractArchive } from '../fs/extract.js';
+import { parseSha256SumLine } from '../net/checksum.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
 import { getVersion } from './misc.js';
@@ -56,10 +57,8 @@ export function releaseAssetUrl(name: string, base = releaseBase()): string {
 /** 从 `sha256sum` 输出里取出某个文件名的摘要。 */
 export function checksumFor(sumsText: string, fileName: string): string | null {
   for (const line of sumsText.split('\n')) {
-    const match = /^([0-9a-f]{64})\s+\*?(\S+)\s*$/i.exec(line.trim());
-    const hash = match?.[1];
-    const name = match?.[2];
-    if (hash && name === fileName) return hash.toLowerCase();
+    const row = parseSha256SumLine(line);
+    if (row?.name === fileName) return row.hash;
   }
   return null;
 }

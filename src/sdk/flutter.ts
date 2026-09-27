@@ -1,5 +1,10 @@
 import type { SdkVersion } from '../core/version.js';
-import { compareVersions, formatFlutterVersion, parseFlutterDirName, parseFlutterUserSpec } from '../core/version.js';
+import {
+  compareTaggedVersions,
+  formatFlutterVersion,
+  parseFlutterDirName,
+  parseFlutterUserSpec,
+} from '../core/version.js';
 import { FLUTTER_VENDORS } from '../vendor/index.js';
 import type { SdkTypeSpec } from './types.js';
 
@@ -12,9 +17,10 @@ export const flutterSdk: SdkTypeSpec = {
   supportsLts: false,
   vendors: FLUTTER_VENDORS,
   parseUserSpec: parseFlutterUserSpec,
+  matchesLoose: (v) => v.extra == null,
   parseDirName: parseFlutterDirName,
   formatVersion: formatFlutterVersion,
-  compareVersions,
+  compareVersions: compareTaggedVersions,
   binRelPath(platform) {
     return `bin/${platform.os === 'windows' ? 'flutter.bat' : 'flutter'}`;
   },

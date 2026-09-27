@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { httpFetch } from './http.js';
@@ -22,6 +21,38 @@ function watchWriteStream(out: fs.WriteStream): { error: () => Error | null } {
     streamError ??= err;
   });
   return { error: () => streamError };
+}
+
+/**
+ * 背压时等 drain。磁盘错误会先 destroy 写流且不再发 drain，只等 drain 会一直挂住。
+ */
+function waitForDrain(out: fs.WriteStream): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (out.destroyed || out.closed) {
+      reject(new Error('write stream closed before drain'));
+      return;
+    }
+    const cleanup = () => {
+      out.off('drain', onDrain);
+      out.off('error', onError);
+      out.off('close', onClose);
+    };
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error('write stream closed before drain'));
+    };
+    out.once('drain', onDrain);
+    out.once('error', onError);
+    out.once('close', onClose);
+  });
 }
 
 async function closeWriteStream(out: fs.WriteStream): Promise<void> {
@@ -70,7 +101,7 @@ export async function downloadFile(
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       timer.refresh();
       throwIfStreamError();
-      if (!out.write(chunk)) await once(out, 'drain');
+      if (!out.write(chunk)) await waitForDrain(out);
       throwIfStreamError();
       hash.update(chunk);
       bytes += chunk.byteLength;

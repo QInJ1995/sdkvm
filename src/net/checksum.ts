@@ -21,6 +21,18 @@ function hex64(value: unknown): string | null {
 }
 
 /**
+ * 解析一行 `sha256sum` 输出。文本模式是 `hash  file`，二进制模式是 `hash *file`。
+ * 星号属于模式标记，不是文件名。
+ */
+export function parseSha256SumLine(line: string): { hash: string; name: string } | null {
+  const match = /^([0-9a-f]{64})\s+\*?(\S+)\s*$/i.exec(line.trim());
+  const hash = match?.[1];
+  const name = match?.[2];
+  if (!hash || !name) return null;
+  return { hash: hash.toLowerCase(), name };
+}
+
+/**
  * 从校验源文本提取期望值：
  * - "<hash>" / "<hash>  filename"（.sha1 / .sha256 / .sha512）
  * - Adoptium 资产 JSON 的 checksum，或当前 *.tar.gz.json 元数据的 sha256

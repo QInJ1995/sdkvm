@@ -17,7 +17,24 @@ import { normalizeExtracted } from '../fs/layout.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
 import { createProgress } from '../ui/progress.js';
+import type { SdkVersion } from '../core/version.js';
 import { cmdPath } from './cmdname.js';
+
+/**
+ * 安装成功后提示的 `use` 参数。
+ * java/node 用 major；go 以及稳定的 flutter/maven/python 用 minor 线。
+ * 预发布只能写完整版本：`use 3.14` / `use 4.0` 会跳过它，或切到同线的正式版。
+ * miniconda 同一条 minor 线上有多个 Python，也写完整版本。
+ */
+export function installUseHint(type: SdkTypeId, version: SdkVersion): string {
+  const sdk = getSdkType(type);
+  if (version.extra && (type === 'python' || type === 'maven' || type === 'flutter')) {
+    return sdk.formatVersion(version);
+  }
+  if (type === 'miniconda') return sdk.formatVersion(version);
+  if (type === 'java' || type === 'node') return String(version.major);
+  return `${version.major}.${version.minor}`;
+}
 
 /** Windows 上杀软可能短暂锁住新解压的文件导致 rename 失败，重试兜底 */
 async function renameWithRetry(from: string, to: string, attempts = 3): Promise<void> {
@@ -62,14 +79,7 @@ export async function installCommand(
   }
 
   const finalDir = path.join(paths.sdks(type), artifact.dirName);
-  // java/node：major；go/flutter/maven：minor 线（1.24 / 3.47 / 3.9）。
-  // miniconda 同一条 minor 线上有多个 Python，提示完整版本，避免 use 26.7 切到刚装的那一个之外。
-  const hintVersion =
-    type === 'miniconda'
-      ? sdk.formatVersion(artifact.version)
-      : type === 'java' || type === 'node'
-        ? String(artifact.version.major)
-        : `${artifact.version.major}.${artifact.version.minor}`;
+  const hintVersion = installUseHint(type, artifact.version);
 
   await withLock(async () => {
     ensureLayout();

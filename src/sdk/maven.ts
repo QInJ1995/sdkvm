@@ -1,6 +1,6 @@
 import type { SdkVersion } from '../core/version.js';
 import {
-  compareVersions,
+  compareTaggedVersions,
   formatMavenVersion,
   parseMavenDirName,
   parseMavenUserSpec,
@@ -18,9 +18,10 @@ export const mavenSdk: SdkTypeSpec = {
   requiresJdk: true,
   vendors: MAVEN_VENDORS,
   parseUserSpec: parseMavenUserSpec,
+  matchesLoose: (v) => v.extra == null,
   parseDirName: parseMavenDirName,
   formatVersion: formatMavenVersion,
-  compareVersions,
+  compareVersions: compareTaggedVersions,
   binRelPath(platform) {
     return `bin/${platform.os === 'windows' ? 'mvn.cmd' : 'mvn'}`;
   },

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compareTaggedVersions,
   compareVersions,
   formatFlutterVersion,
   formatGoVersion,
@@ -312,6 +313,17 @@ describe('maven version parsing', () => {
     expect(formatMavenVersion(v as never)).toBe('4.0.0-rc-4');
     expect(parseMavenDirName('nodejs-22.20.0')).toBeNull();
     expect(parseMavenDirName('maven-3')).toBeNull();
+  });
+
+  it('ranks a release ahead of its prerelease, and rc-10 ahead of rc-4', () => {
+    const v = (s: string) => parseMavenVersion('maven', s);
+    expect(compareTaggedVersions(v('4.0.0'), v('4.0.0-rc-4'))).toBeGreaterThan(0);
+    expect(compareTaggedVersions(v('4.0.0-rc-10'), v('4.0.0-rc-4'))).toBeGreaterThan(0);
+    expect(compareTaggedVersions(v('4.0.0-rc-1'), v('4.0.0-beta-2'))).toBeGreaterThan(0);
+    expect(compareTaggedVersions(v('4.0.0-beta-1'), v('4.0.0-alpha-2'))).toBeGreaterThan(0);
+    const flutter = (s: string) => parseFlutterVersion('flutter', s);
+    expect(compareTaggedVersions(flutter('3.49.0'), flutter('3.49.0-0.1.pre'))).toBeGreaterThan(0);
+    expect(compareTaggedVersions(flutter('3.49.0-0.10.pre'), flutter('3.49.0-0.2.pre'))).toBeGreaterThan(0);
   });
 });
 

@@ -86,6 +86,14 @@ describe('parsePythonSums', () => {
     expect(files.find((f) => f.filename === name('3.14.0rc2', 'aarch64-apple-darwin'))?.version.extra).toBe('rc2');
   });
 
+  it('accepts a sha256sum binary-mode asterisk', () => {
+    const text = `${'a'.repeat(64)} *${name('3.12.7', 'aarch64-apple-darwin')}\n`;
+    const files = parsePythonSums(text);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.filename).toBe(name('3.12.7', 'aarch64-apple-darwin'));
+    expect(files[0]?.sha256).toBe('a'.repeat(64));
+  });
+
   it('prefers the stripped archive when both exist', () => {
     const picked = preferStripped(files).find(
       (f) => f.triple === 'aarch64-apple-darwin' && formatPythonVersion(f.version) === '3.13.1',

@@ -1,3 +1,4 @@
+import { parseSha256SumLine } from '../net/checksum.js';
 import { httpJson, httpText } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { compareVersions, formatNodeVersion, parseNodeVersion } from '../core/version.js';
@@ -37,8 +38,8 @@ async function fetchShasums(version: string): Promise<Map<string, string>> {
   const text = await httpText(`${DIST}/${version}/SHASUMS256.txt`);
   const sums = new Map<string, string>();
   for (const line of text.split('\n')) {
-    const m = /^([0-9a-f]{64})\s+(\S+)$/.exec(line.trim());
-    if (m && m[1] && m[2]) sums.set(m[2], m[1]);
+    const row = parseSha256SumLine(line);
+    if (row) sums.set(row.name, row.hash);
   }
   return sums;
 }

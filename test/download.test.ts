@@ -101,4 +101,26 @@ describe('downloadFile 长度校验', () => {
     );
     expect(existsSync(`${dest}.part`)).toBe(false);
   });
+
+  it('写流在 drain 之前出错时失败，而不是一直等 drain', async () => {
+    class StuckWriteStream extends Writable {
+      constructor() {
+        super({ highWaterMark: 0 });
+      }
+      override _write(_chunk: Buffer, _enc: BufferEncoding, _cb: (err?: Error | null) => void): void {
+        setImmediate(() => {
+          this.destroy(new Error('disk full'));
+        });
+      }
+    }
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(
+      () => new StuckWriteStream() as unknown as fs.WriteStream,
+    );
+    globalThis.fetch = (async () =>
+      new Response('hello world', { status: 200, headers: { 'content-length': '11' } })) as typeof fetch;
+
+    const dest = path.join(dir, 'stuck.zip');
+    await expect(downloadFile('https://example.com/stuck.zip', dest)).rejects.toThrow(/disk full/);
+    expect(existsSync(`${dest}.part`)).toBe(false);
+  });
 });

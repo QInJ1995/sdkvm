@@ -24,7 +24,7 @@ export interface SdkTypeSpec {
   readonly requiresJdk?: boolean;
   /**
    * 已安装版本里哪些 major 算 LTS（仅 supportsLts 时使用）。
-   * java 对齐 Adoptium；node 为偶数年 major（官方 LTS 线约定）。
+   * java 对齐 Adoptium；node 为已进入 LTS 的偶数 major（发布年 10 月 1 日起）。
    */
   isLtsMajor?(major: number): boolean;
   /** 有序厂商列表，[0] 为默认厂商 */
@@ -38,7 +38,7 @@ export interface SdkTypeSpec {
   matchesFull?(installed: SdkVersion, version: string): boolean;
   /**
    * major / line / latest 是否纳入该已安装版本。缺省全部纳入。
-   * Python 预发布不纳入，只能用完整版本号切换。
+   * Python / Maven / Flutter 的预发布不纳入，只能用完整版本号切换。
    */
   matchesLoose?(installed: SdkVersion): boolean;
   /** 安装目录名 → 版本；不匹配返回 null */

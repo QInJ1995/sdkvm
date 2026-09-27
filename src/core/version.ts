@@ -111,6 +111,42 @@ export function compareVersions(a: SdkVersion, b: SdkVersion): number {
   return numericPairwise(a.build, b.build);
 }
 
+/** 预发布标记按文本段和数字段交错比较：rc-10 > rc-2，0.10.pre > 0.2.pre */
+function compareVersionTags(a: string, b: string): number {
+  const parts = (s: string) => s.match(/\d+|[^\d]+/g) ?? [];
+  const as = parts(a);
+  const bs = parts(b);
+  const len = Math.max(as.length, bs.length);
+  for (let i = 0; i < len; i++) {
+    const x = as[i];
+    const y = bs[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (/^\d+$/.test(x) && /^\d+$/.test(y)) {
+      const xn = Number(x);
+      const yn = Number(y);
+      if (xn !== yn) return xn > yn ? 1 : -1;
+      continue;
+    }
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+/**
+ * 同一组数字上，正式版高于预发布（extra 为空表示正式版）。
+ * 只用于把 extra 当作预发布标记的类型（Maven、Flutter）。
+ * Java 的 extra 是附加版本段，空 extra 更小，仍用 compareVersions。
+ */
+export function compareTaggedVersions(a: SdkVersion, b: SdkVersion): number {
+  const base = compareVersions({ ...a, extra: null }, { ...b, extra: null });
+  if (base !== 0) return base;
+  if (a.extra == null && b.extra == null) return 0;
+  if (a.extra == null) return 1;
+  if (b.extra == null) return -1;
+  return compareVersionTags(a.extra, b.extra);
+}
+
 /**
  * 版本查询：major（java 装该大版本最新）/ line（go 装该 minor 线最新）/
  * lts（仅 java）/ latest（仅 go）/ full（精确）

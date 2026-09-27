@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nodejsVendor } from '../src/vendor/nodejs.js';
 import { goSdk } from '../src/sdk/go.js';
-import { nodeSdk } from '../src/sdk/node.js';
+import { isNodeLtsMajor, nodeSdk } from '../src/sdk/node.js';
 
 const MAC = { os: 'mac' as const, arch: 'aarch64' as const };
 const LIN = { os: 'linux' as const, arch: 'x64' as const };
@@ -21,7 +21,7 @@ const INDEX = [
 
 function shasums(v: string): string {
   return [
-    `${X}  node-${v}-darwin-arm64.tar.xz`,
+    `${X} *node-${v}-darwin-arm64.tar.xz`,
     `${X}  node-${v}-darwin-arm64.tar.gz`,
     `${Y}  node-${v}-linux-x64.tar.xz`,
     `${Y}  node-${v}-linux-x64.tar.gz`,
@@ -112,6 +112,19 @@ describe('nodejs vendor', () => {
       { key: '22', lts: true, latestFullVersion: '22.3.1' },
       { key: '20', lts: false, latestFullVersion: '20.1.0' },
     ]);
+  });
+});
+
+describe('isNodeLtsMajor', () => {
+  const september = new Date('2026-09-27T00:00:00Z');
+  const october = new Date('2026-10-01T00:00:00Z');
+
+  it('keeps an even major in Current until October of its release year', () => {
+    expect(isNodeLtsMajor(26, september)).toBe(false);
+    expect(isNodeLtsMajor(26, october)).toBe(true);
+    expect(isNodeLtsMajor(24, september)).toBe(true);
+    expect(isNodeLtsMajor(23, september)).toBe(false);
+    expect(isNodeLtsMajor(21, october)).toBe(false);
   });
 });
 

@@ -1,3 +1,4 @@
+import { parseSha256SumLine } from '../net/checksum.js';
 import { httpJson, httpText } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { cmdPath } from '../cli/cmdname.js';
@@ -59,9 +60,9 @@ export function pythonTriple(platform: VendorPlatform): string {
 export function parsePythonSums(text: string): PythonFile[] {
   const out: PythonFile[] = [];
   for (const line of text.split('\n')) {
-    const row = /^([0-9a-f]{64})\s+(\S+)$/i.exec(line.trim());
-    if (!row?.[1] || !row[2]) continue;
-    const parsed = FILE_RE.exec(row[2]);
+    const row = parseSha256SumLine(line);
+    if (!row) continue;
+    const parsed = FILE_RE.exec(row.name);
     if (!parsed?.[1] || !parsed[2] || !parsed[3] || !parsed[5]) continue;
     if (!BASELINE_TRIPLES.has(parsed[5])) continue;
     const token = `${parsed[1]}.${parsed[2]}.${parsed[3]}${parsed[4] ?? ''}`;
@@ -72,9 +73,9 @@ export function parsePythonSums(text: string): PythonFile[] {
       continue;
     }
     out.push({
-      filename: row[2],
+      filename: row.name,
       version,
-      sha256: row[1].toLowerCase(),
+      sha256: row.hash,
       triple: parsed[5],
       stripped: parsed[6] === '_stripped',
     });

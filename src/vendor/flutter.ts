@@ -49,7 +49,7 @@ async function fetchEntries(platform: VendorPlatform): Promise<{
   parsed.sort((a, b) => compareVersions(b.v, a.v));
   return {
     baseUrl: manifest.base_url,
-    stable: parsed.filter((x) => x.raw.channel === 'stable'),
+    stable: parsed.filter((x) => x.raw.channel === 'stable' && x.v.extra == null),
     all: parsed,
   };
 }
