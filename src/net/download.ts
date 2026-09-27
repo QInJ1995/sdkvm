@@ -26,13 +26,20 @@ function watchWriteStream(out: fs.WriteStream): { error: () => Error | null } {
 /**
  * 背压时等 drain。磁盘错误会先 destroy 写流且不再发 drain，只等 drain 会一直挂住。
  */
-function waitForDrain(out: fs.WriteStream): Promise<void> {
+function waitForDrain(out: fs.WriteStream, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    const abortReason = (): Error =>
+      signal.reason instanceof Error ? signal.reason : new Error('aborted');
+    if (signal.aborted) {
+      reject(abortReason());
+      return;
+    }
     if (out.destroyed || out.closed) {
       reject(new Error('write stream closed before drain'));
       return;
     }
     const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
       out.off('drain', onDrain);
       out.off('error', onError);
       out.off('close', onClose);
@@ -49,6 +56,11 @@ function waitForDrain(out: fs.WriteStream): Promise<void> {
       cleanup();
       reject(new Error('write stream closed before drain'));
     };
+    const onAbort = () => {
+      cleanup();
+      reject(abortReason());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
     out.once('drain', onDrain);
     out.once('error', onError);
     out.once('close', onClose);
@@ -101,7 +113,7 @@ export async function downloadFile(
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       timer.refresh();
       throwIfStreamError();
-      if (!out.write(chunk)) await waitForDrain(out);
+      if (!out.write(chunk)) await waitForDrain(out, ac.signal);
       throwIfStreamError();
       hash.update(chunk);
       bytes += chunk.byteLength;

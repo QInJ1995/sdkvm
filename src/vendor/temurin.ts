@@ -94,6 +94,7 @@ export const temurinVendor: Vendor = {
       const ltsMajors = data.available_releases.filter((m) =>
         data.available_lts_releases.includes(m),
       );
+      if (ltsMajors.length === 0) throw new SdkvmError('No Temurin LTS release found');
       const latest = Math.max(...ltsMajors);
       return resolveMajor(latest, platform);
     }

@@ -16,6 +16,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** 不再读取的响应要取消，否则重定向和 4xx 会占着连接。 */
+async function releaseBody(res: Response): Promise<void> {
+  await res.body?.cancel()?.catch(() => undefined);
+}
+
 async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
   const signal = init.signal ?? AbortSignal.timeout(CONNECT_TIMEOUT_MS);
   const res = await fetch(url, { ...init, signal, headers: { 'user-agent': UA, ...init.headers } });
@@ -30,15 +35,17 @@ export async function httpFetch(url: string, init: RequestInit = {}): Promise<Re
       const res = await fetchOnce(url, init);
       // redirect: manual 的 3xx 是调用方要解析的正常结果，不算错误
       if (init.redirect === 'manual' && res.status >= 300 && res.status < 400) {
+        await releaseBody(res);
         return res;
       }
       if (res.status >= 500 && attempt < RETRIES) {
-        await res.body?.cancel()?.catch(() => undefined);
+        await releaseBody(res);
         lastErr = new HttpError(`Server error ${res.status}`, res.status, url);
         await sleep(500 * 2 ** (attempt - 1));
         continue;
       }
       if (!res.ok) {
+        await releaseBody(res);
         throw new HttpError(`HTTP ${res.status} ${res.statusText || ''}`.trim(), res.status, url);
       }
       return res;

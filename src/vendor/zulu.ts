@@ -1,5 +1,5 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
-import { httpJson } from '../net/http.js';
+import { httpFetch } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
 import { detectPlatform } from '../core/platform.js';
@@ -59,16 +59,41 @@ function pickPlainJdk(
   return candidates[candidates.length - 1] ?? null;
 }
 
+/** Azul 默认每页 50 条。JDK 8 有五百多条包，只读第一页会漏掉较旧的精确版本。 */
+const ZULU_PAGE_SIZE = 1000;
+const ZULU_MAX_PAGES = 20;
+
+function nextZuluPage(header: string | null): number | null {
+  if (!header) return null;
+  try {
+    const parsed = JSON.parse(header) as { next_page?: unknown };
+    return typeof parsed.next_page === 'number' && parsed.next_page > 0 ? parsed.next_page : null;
+  } catch {
+    return null;
+  }
+}
+
 async function queryPackages(
   javaVersion: string,
   platform: VendorPlatform,
 ): Promise<ZuluPackage[]> {
   const { os, arch } = azulParams(platform);
-  const url =
-    `${API}/zulu/packages/?java_version=${javaVersion}&os=${os}&arch=${arch}` +
-    `&hw_bitness=64&release_status=ga&page_size=50`;
-  const data = await httpJson<ZuluPackage[]>(url);
-  return Array.isArray(data) ? data : [];
+  const out: ZuluPackage[] = [];
+  let page = 1;
+  const seen = new Set<number>();
+  while (!seen.has(page) && seen.size < ZULU_MAX_PAGES) {
+    seen.add(page);
+    const url =
+      `${API}/zulu/packages/?java_version=${encodeURIComponent(javaVersion)}&os=${os}&arch=${arch}` +
+      `&hw_bitness=64&release_status=ga&page_size=${ZULU_PAGE_SIZE}&page=${page}`;
+    const res = await httpFetch(url, { headers: { accept: 'application/json' } });
+    const data = (await res.json()) as unknown;
+    if (Array.isArray(data)) out.push(...(data as ZuluPackage[]));
+    const next = nextZuluPage(res.headers.get('x-pagination'));
+    if (next == null || next === page) break;
+    page = next;
+  }
+  return out;
 }
 
 export const zuluVendor: Vendor = {

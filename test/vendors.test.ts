@@ -73,6 +73,14 @@ describe('temurin', () => {
     expect(a.downloadUrl).toContain('OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip');
   });
 
+  it('resolve lts fails clearly when the index has no LTS line', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => resJson({ available_releases: [22], available_lts_releases: [] })),
+    );
+    await expect(temurinVendor.resolve({ kind: 'lts' }, MAC)).rejects.toThrow(/No Temurin LTS/);
+  });
+
   it('listMajors maps lts flags', async () => {
     const fetchMock = vi.fn(async () =>
       resJson({ available_releases: [17, 21, 22], available_lts_releases: [21] }),
@@ -155,6 +163,39 @@ describe('zulu', () => {
     expect(a.downloadUrl).toBe(
       'https://cdn.azul.com/zulu/bin/zulu21.52.203-ca-jdk21.0.12.1-win_aarch64.zip',
     );
+  });
+
+  it('follows x-pagination so an older build is not hidden past the first page', async () => {
+    const old = {
+      name: 'zulu8.40.0.13-ca-jdk8.0.202-linux_x64.tar.gz',
+      download_url: 'https://cdn.azul.com/zulu8.0.202.tar.gz',
+      java_version: [8, 0, 202],
+      distro_version: [8, 40, 0, 13],
+    };
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const page = new URL(String(url)).searchParams.get('page');
+      if (page === '2') {
+        return new Response(JSON.stringify([old]), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-pagination': JSON.stringify({ page: 2 }),
+          },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-pagination': JSON.stringify({ page: 1, next_page: 2 }),
+        },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const a = await zulu.resolve({ kind: 'full', version: '8.0.202' }, LIN);
+    expect(a.downloadUrl).toBe(old.download_url);
+    expect(a.dirName).toBe('zulu-8.0.202');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('no plain jdk → helpful error', async () => {

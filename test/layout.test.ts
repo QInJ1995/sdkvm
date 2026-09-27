@@ -56,6 +56,17 @@ describe('extract + normalize', () => {
     expect(home.endsWith('jdk-21.0.5')).toBe(true);
   });
 
+  it('ignores __MACOSX and a sibling file, and keeps the directory that has the binary', () => {
+    const dest = path.join(work, 'out-meta');
+    fs.mkdirSync(path.join(dest, 'jdk-21.0.5', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'jdk-21.0.5', 'bin', 'java'), '#!/bin/sh\n');
+    fs.mkdirSync(path.join(dest, '__MACOSX'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'release'), 'temurin\n');
+    const { root, home } = normalizeExtracted(dest, LIN, 'java');
+    expect(path.basename(root)).toBe('jdk-21.0.5');
+    expect(home.endsWith('jdk-21.0.5')).toBe(true);
+  });
+
   it('invalid archive (no bin/java) throws SdkvmError', async () => {
     const src = path.join(work, 'src-bad');
     fs.mkdirSync(path.join(src, 'some-dir'), { recursive: true });

@@ -182,7 +182,12 @@ export async function installCommand(
         throw err;
       } finally {
         fs.rmSync(dest, { force: true });
-        fs.rmSync(paths.tmp(), { recursive: true, force: true });
+        // 安装目录已经就位时，临时目录被占用不应让这次安装失败
+        try {
+          fs.rmSync(paths.tmp(), { recursive: true, force: true });
+        } catch {
+          // 留下 tmp，下次安装会再建
+        }
         fs.mkdirSync(paths.tmp(), { recursive: true });
       }
     }

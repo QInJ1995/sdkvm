@@ -123,4 +123,31 @@ describe('downloadFile 长度校验', () => {
     await expect(downloadFile('https://example.com/stuck.zip', dest)).rejects.toThrow(/disk full/);
     expect(existsSync(`${dest}.part`)).toBe(false);
   });
+
+  it('写流一直不 drain 时，空闲超时会结束等待', async () => {
+    vi.useFakeTimers();
+    class NeverDrain extends Writable {
+      constructor() {
+        super({ highWaterMark: 0 });
+      }
+      override _write(): void {
+        // 不调用回调，模拟磁盘不再接受数据
+      }
+    }
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(
+      () => new NeverDrain() as unknown as fs.WriteStream,
+    );
+    globalThis.fetch = (async () =>
+      new Response('hello world', { status: 200, headers: { 'content-length': '11' } })) as typeof fetch;
+
+    const dest = path.join(dir, 'stall.zip');
+    const pending = downloadFile('https://example.com/stall.zip', dest);
+    const assertion = expect(pending).rejects.toThrow(/Download stalled/);
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

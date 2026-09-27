@@ -12,20 +12,47 @@ export interface NormalizedSdk {
   home: string;
 }
 
+/** tar/zip 解出来的元数据，不是 SDK 根目录。 */
+function isArchiveMeta(name: string): boolean {
+  return (
+    name === '.DS_Store' ||
+    name === '__MACOSX' ||
+    name.startsWith('._') ||
+    name.startsWith('PaxHeader') ||
+    name.startsWith('@PaxHeader')
+  );
+}
+
+function hasSdkBin(
+  dir: string,
+  platform: Platform,
+  type: SdkTypeId,
+): boolean {
+  const spec = getSdkType(type);
+  return fs.existsSync(path.join(spec.locateHome(dir), spec.binRelPath(platform)));
+}
+
 /**
  * 归一化解压结果：单根目录探测 + 类型化 home 定位 + 可执行文件校验。
- * root 候选：解压目录里唯一子目录（常见 tarball 布局）或解压目录本身（散装文件）。
+ * 常见 tarball 只有一个子目录。旁边如果还有许可证或 __MACOSX，改找真正含可执行文件的那一层。
  */
 export function normalizeExtracted(tmpDir: string, platform: Platform, type: SdkTypeId): NormalizedSdk {
   const spec = getSdkType(type);
-  const entries = fs.readdirSync(tmpDir).filter((e) => e !== '._' && !e.startsWith('._'));
-  // 忽略 macOS 元数据文件后判断唯一目录
-  const real = entries.filter((e) => e !== '.DS_Store');
-  let root: string;
-  if (real.length === 1 && fs.statSync(path.join(tmpDir, real[0] as string)).isDirectory()) {
-    root = path.join(tmpDir, real[0] as string);
+  const entries = fs.readdirSync(tmpDir).filter((name) => !isArchiveMeta(name));
+  const dirs = entries.filter((name) => {
+    try {
+      return fs.statSync(path.join(tmpDir, name)).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+
+  let root = tmpDir;
+  if (dirs.length === 1 && entries.length === 1) {
+    root = path.join(tmpDir, dirs[0] as string);
   } else {
-    root = tmpDir;
+    const candidates = [tmpDir, ...dirs.map((name) => path.join(tmpDir, name))];
+    root = candidates.find((dir) => hasSdkBin(dir, platform, type)) ?? tmpDir;
   }
 
   const home = spec.locateHome(root);
