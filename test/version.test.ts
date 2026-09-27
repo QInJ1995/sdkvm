@@ -21,6 +21,10 @@ import {
   formatMavenVersion,
   parseMavenDirName,
   parseMavenUserSpec,
+  parseMinicondaVersion,
+  formatMinicondaVersion,
+  parseMinicondaDirName,
+  parseMinicondaUserSpec,
 } from '../src/core/version.js';
 import { SdkvmError } from '../src/util/errors.js';
 
@@ -303,5 +307,58 @@ describe('maven version parsing', () => {
     expect(formatMavenVersion(v as never)).toBe('4.0.0-rc-4');
     expect(parseMavenDirName('nodejs-22.20.0')).toBeNull();
     expect(parseMavenDirName('maven-3')).toBeNull();
+  });
+});
+
+describe('miniconda version parsing', () => {
+  it('parses python tag, semver, and build', () => {
+    expect(parseMinicondaVersion('miniconda', 'py313_26.7.1-1')).toMatchObject({
+      major: 26,
+      minor: 7,
+      patch: 1,
+      extra: '3.13',
+      build: '1',
+    });
+    expect(formatMinicondaVersion(parseMinicondaVersion('miniconda', 'py39_4.12.0'))).toBe('py39_4.12.0');
+    expect(formatMinicondaVersion(parseMinicondaVersion('miniconda', 'miniconda-py310_23.11.0-2'))).toBe(
+      'py310_23.11.0-2',
+    );
+    expect(compareVersions(
+      parseMinicondaVersion('miniconda', 'py313_26.7.1-1'),
+      parseMinicondaVersion('miniconda', 'py314_26.7.1-1'),
+    )).toBe(-1);
+  });
+
+  it('user spec: major / line / build / python / latest / vendor prefix', () => {
+    expect(parseMinicondaUserSpec('26')).toEqual({ spec: { kind: 'major', major: 26 } });
+    expect(parseMinicondaUserSpec('26.7')).toEqual({ spec: { kind: 'line', major: 26, minor: 7 } });
+    expect(parseMinicondaUserSpec('26.7.1-1')).toEqual({ spec: { kind: 'full', version: '26.7.1-1' } });
+    expect(parseMinicondaUserSpec('py313')).toEqual({ spec: { kind: 'full', version: 'py313' } });
+    expect(parseMinicondaUserSpec('py313_26.7.1-1')).toEqual({ spec: { kind: 'full', version: 'py313_26.7.1-1' } });
+    expect(parseMinicondaUserSpec('latest')).toEqual({ spec: { kind: 'latest' } });
+    expect(parseMinicondaUserSpec('miniconda-py313_26.7.1-1')).toEqual({
+      vendor: 'miniconda',
+      spec: { kind: 'full', version: 'py313_26.7.1-1' },
+    });
+  });
+
+  it('user spec: lts and anaconda-style calendar versions are rejected', () => {
+    let hint: string | undefined;
+    try {
+      parseMinicondaUserSpec('lts');
+    } catch (err) {
+      hint = (err as SdkvmError).hint;
+    }
+    expect(hint).toMatch(/no lts/);
+    expect(() => parseMinicondaUserSpec('2025.12-2')).toThrow(/Invalid Miniconda version/);
+    expect(() => parseMinicondaUserSpec('py3')).toThrow(/Invalid Miniconda version/);
+  });
+
+  it('dir name parse round-trip', () => {
+    const v = parseMinicondaDirName('miniconda-py313_26.7.1-1');
+    expect(v?.vendor).toBe('miniconda');
+    expect(formatMinicondaVersion(v as never)).toBe('py313_26.7.1-1');
+    expect(parseMinicondaDirName('maven-3.9.9')).toBeNull();
+    expect(parseMinicondaDirName('miniconda-26.7')).toBeNull();
   });
 });

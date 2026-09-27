@@ -26,10 +26,12 @@ export function rcBlock(type: SdkTypeId): string {
   const toPosix = (p: string) => p.split(path.sep).join('/');
   // 根目录在 home 之外（SDKVM_HOME 自定义，或跨盘导致 path.relative 返回绝对路径）时退回绝对 posix 路径
   const link = rel.startsWith('..') || path.isAbsolute(rel) ? toPosix(abs) : `$HOME/${toPosix(rel)}`;
+  const extra = spec.rcExtra?.(spec.envVar);
   return [
     rcBegin(type),
     `export ${spec.envVar}="${link}"`,
     `case ":$PATH:" in *":$${spec.envVar}${binSuffix}:"*) ;; *) export PATH="$${spec.envVar}${binSuffix}:$PATH";; esac`,
+    ...(extra ? [extra] : []),
     rcEnd(type),
   ].join('\n');
 }

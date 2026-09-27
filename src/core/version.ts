@@ -407,3 +407,123 @@ export function parseMavenUserSpec(input: string): UserSpec {
     hint: 'Expected: 3, 3.9, 3.9.9, 4.0.0-rc-4, latest, or with vendor prefix like maven-3.9.9',
   });
 }
+
+// —— miniconda 解析 ——
+
+export const MINICONDA_VENDOR_IDS = ['miniconda'] as const;
+
+const MINICONDA_VERSION_HINT =
+  'Expected forms: 26, 26.7, 26.7.1-1, py313, py313_26.7.1-1, latest';
+
+/** py313 → "3.13"，py39 → "3.9"，py310 → "3.10" */
+function pythonExtra(pyMajor: string, pyMinor: string): string {
+  return `${pyMajor}.${pyMinor}`;
+}
+
+/**
+ * 解析 Miniconda 版本。extra 存 Python（"3.13"），build 存发行构建号（"1"）。
+ * 接受 py313_26.7.1-1、py39_4.12.0、26.7.1-1、4.12.0，以及 miniconda- 前缀。
+ */
+export function parseMinicondaVersion(vendor: VendorId, input: string): SdkVersion {
+  const raw = input.trim();
+  const s = raw.replace(/^miniconda3?-/i, '').replace(/^v/i, '');
+  const m = /^(?:py(\d)(\d+)_)?(\d+)\.(\d+)\.(\d+)(?:-(\d+))?$/.exec(s);
+  if (!m || !m[3] || !m[4] || !m[5]) {
+    throw new SdkvmError(`Invalid Miniconda version: "${input}"`, {
+      hint: MINICONDA_VERSION_HINT,
+    });
+  }
+  return {
+    vendor,
+    major: Number(m[3]),
+    minor: Number(m[4]),
+    patch: Number(m[5]),
+    extra: m[1] && m[2] ? pythonExtra(m[1], m[2]) : null,
+    build: m[6] ?? null,
+    raw,
+  };
+}
+
+/** py313_26.7.1-1；无 Python 标签时只留 4.12.0；无构建号时不补 -0 */
+export function formatMinicondaVersion(v: SdkVersion): string {
+  const base = `${v.major}.${v.minor}.${v.patch ?? 0}`;
+  const withBuild = v.build ? `${base}-${v.build}` : base;
+  if (!v.extra) return withBuild;
+  const [pyMajor, pyMinor] = v.extra.split('.');
+  return `py${pyMajor ?? ''}${pyMinor ?? ''}_${withBuild}`;
+}
+
+/** 发行线 key：26.7 */
+export function formatMinicondaLine(v: SdkVersion): string {
+  return `${v.major}.${v.minor}`;
+}
+
+/**
+ * full 规格是否命中该 Miniconda 版本。
+ * py313：该 Python 的任意安装器；26.7.1-1：该构建里任意 Python；
+ * py313_26.7.1：该 Python 的任意构建；py313_26.7.1-1：精确。
+ */
+export function minicondaMatchesFull(installed: SdkVersion, specVersion: string): boolean {
+  const pyOnly = /^py(\d)(\d+)$/.exec(specVersion);
+  if (pyOnly?.[1] && pyOnly[2]) return installed.extra === `${pyOnly[1]}.${pyOnly[2]}`;
+  let want: SdkVersion;
+  try {
+    want = parseMinicondaVersion(installed.vendor || 'miniconda', specVersion);
+  } catch {
+    return false;
+  }
+  const matchPython = specVersion.startsWith('py');
+  const matchBuild = /-\d+$/.test(specVersion);
+  return (
+    installed.major === want.major &&
+    installed.minor === want.minor &&
+    (installed.patch ?? 0) === (want.patch ?? 0) &&
+    (!matchBuild || installed.build === want.build) &&
+    (!matchPython || installed.extra === want.extra)
+  );
+}
+
+/** miniconda 安装目录名 → 版本；不匹配返回 null */
+export function parseMinicondaDirName(dir: string): SdkVersion | null {
+  const m = new RegExp(`^(${MINICONDA_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
+  if (!m || !m[1] || !m[2]) return null;
+  try {
+    return parseMinicondaVersion(m[1], m[2]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * miniconda 版本语法：26（该 major 最新）/ 26.7（minor 线最新）/
+ * 26.7.1-1（该构建最高 Python）/ py313（该 Python 最新）/
+ * py313_26.7.1-1（精确）/ latest。可带 miniconda- 前缀。无 lts。
+ */
+export function parseMinicondaUserSpec(input: string): UserSpec {
+  let s = input.trim().toLowerCase();
+  let vendor: VendorId | undefined;
+  const prefixed = /^(miniconda)-(.+)$/.exec(s);
+  if (prefixed && prefixed[2]) {
+    vendor = 'miniconda';
+    s = prefixed[2];
+  }
+  if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
+  if (s === 'lts' || s === '--lts') {
+    throw new SdkvmError(`Invalid Miniconda version: "${input}"`, {
+      hint: `Miniconda has no lts alias — use ${MINICONDA_VERSION_HINT.replace('Expected forms: ', '')}`,
+    });
+  }
+  if (/^py\d{2,}$/.test(s)) return { vendor, spec: { kind: 'full', version: s } };
+  if (/^(?:py\d{2,}_)?\d+\.\d+\.\d+(?:-\d+)?$/.test(s)) {
+    parseMinicondaVersion(vendor ?? 'miniconda', s);
+    return { vendor, spec: { kind: 'full', version: s } };
+  }
+  const line = /^(\d+)\.(\d+)$/.exec(s);
+  if (line && line[1] && line[2]) {
+    return { vendor, spec: { kind: 'line', major: Number(line[1]), minor: Number(line[2]) } };
+  }
+  if (/^\d+$/.test(s)) return { vendor, spec: { kind: 'major', major: Number(s) } };
+  throw new SdkvmError(`Invalid Miniconda version: "${input}"`, {
+    hint: MINICONDA_VERSION_HINT,
+  });
+}

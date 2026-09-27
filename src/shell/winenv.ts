@@ -89,10 +89,17 @@ export async function removeFromUserPathWin(entry: string): Promise<void> {
   await run('powershell.exe', encoded(ps));
 }
 
-/** 某类型环境变量对应的 PATH 项（如 %JAVA_HOME%\bin；node 在 windows 无 bin/ → %NODE_HOME%） */
-export function sdkPathEntry(type: SdkTypeId): string {
+/** 某类型要写入用户 PATH 的全部项。多数 SDK 只有一段；Miniconda 在 Windows 有多段。 */
+export function sdkPathEntries(type: SdkTypeId): string[] {
   const spec = getSdkType(type);
-  return `%${spec.envVar}%${spec.envBinSuffix(detectPlatform())}`;
+  const platform = detectPlatform();
+  const suffixes = spec.envPathSuffixes?.(platform) ?? [spec.envBinSuffix(platform)];
+  return suffixes.map((suffix) => `%${spec.envVar}%${suffix}`);
+}
+
+/** 某类型环境变量对应的第一段 PATH 项（如 %JAVA_HOME%\bin；node 在 windows 无 bin/ → %NODE_HOME%） */
+export function sdkPathEntry(type: SdkTypeId): string {
+  return sdkPathEntries(type)[0] ?? '';
 }
 
 export function assertWindows(): void {

@@ -50,7 +50,7 @@ export function currentSdk(type: SdkTypeId): InstalledSdk | null {
 /**
  * 按用户输入匹配已安装版本：
  * java: 21 → 该 major 最新 / lts / 21.0.5 前缀匹配；go: 1.24 → 该 minor 线最新 / latest / 1.24.5 精确。
- * 可带 vendor 前缀。
+ * miniconda full：py313、26.7.1-1 走 matchesFull。可带 vendor 前缀。
  */
 export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: string): InstalledSdk {
   const spec = getSdkType(type);
@@ -79,6 +79,7 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
   } else {
     const v = parsed.version;
     matched = candidates.filter((j) => {
+      if (spec.matchesFull) return spec.matchesFull(j.version, v);
       const f = spec.formatVersion(j.version);
       return f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`);
     });

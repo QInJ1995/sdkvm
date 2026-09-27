@@ -10,7 +10,7 @@ import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { detectRcFile } from '../shell/detect.js';
 import { rcBlock, upsertRcFile } from '../shell/rc.js';
-import { ensureUserPathWin, setSdkEnvWin, sdkPathEntry } from '../shell/winenv.js';
+import { ensureUserPathWin, setSdkEnvWin, sdkPathEntries } from '../shell/winenv.js';
 import { log } from '../ui/log.js';
 import { CLI_BIN } from './cmdname.js';
 
@@ -47,7 +47,9 @@ export async function useCommand(
     // rc / 注册表和 current 链接放在同一把锁里，避免两次 use 互相覆盖标记块
     if (platform.os === 'windows') {
       await setSdkEnvWin(type);
-      await ensureUserPathWin(sdkPathEntry(type));
+      for (const entry of sdkPathEntries(type)) {
+        await ensureUserPathWin(entry);
+      }
     } else {
       rc = detectRcFile(platform.os);
       if (rc) upsertRcFile(rc, type);

@@ -97,9 +97,32 @@ describe('maven rc block', () => {
   });
 });
 
+describe('miniconda rc block', () => {
+  it('exports MINICONDA_HOME and sources conda.sh inside the marker', () => {
+    const block = rcBlock('miniconda');
+    expect(block).toContain('MINICONDA_HOME=');
+    expect(block).toContain('current-miniconda');
+    expect(block).toContain('"$HOME/.sdkvm/current-miniconda"');
+    expect(block).toContain('export CONDA_EXE="$MINICONDA_HOME/bin/conda"');
+    expect(block).toContain('export CONDA_PYTHON_EXE="$MINICONDA_HOME/bin/python"');
+    const exe = block.indexOf('export CONDA_EXE=');
+    const source = block.indexOf('. "$MINICONDA_HOME/etc/profile.d/conda.sh"');
+    expect(exe).toBeGreaterThan(-1);
+    expect(source).toBeGreaterThan(exe);
+    expect(block.startsWith(rcBegin('miniconda'))).toBe(true);
+    expect(block.endsWith(rcEnd('miniconda'))).toBe(true);
+  });
+
+  it('does not add the conda hook to other SDKs', () => {
+    expect(rcBlock('java')).not.toContain('conda.sh');
+    expect(rcBlock('node')).not.toContain('conda.sh');
+    expect(rcBlock('maven')).not.toContain('conda.sh');
+  });
+});
+
 describe('rc separator safety', () => {
   it('no backslash separators in any block (shell syntax)', () => {
-    for (const t of ['java', 'go', 'flutter', 'node', 'maven'] as const) {
+    for (const t of ['java', 'go', 'flutter', 'node', 'maven', 'miniconda'] as const) {
       expect(rcBlock(t)).not.toMatch(/\\/);
     }
   });

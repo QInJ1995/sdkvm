@@ -31,7 +31,7 @@ export function normalizeExtracted(tmpDir: string, platform: Platform, type: Sdk
   const home = spec.locateHome(root);
   const bin = path.join(home, spec.binRelPath(platform));
   if (!fs.existsSync(bin)) {
-    throw new SdkvmError(`Archive does not look like a valid ${spec.label} (bin not found)`, {
+    throw new SdkvmError(`Does not look like a valid ${spec.label} (bin not found)`, {
       hint: `expected ${bin}`,
     });
   }

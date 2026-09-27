@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyMirror, applyMirrorDetail } from '../src/vendor/mirror.js';
 import { parseVersion } from '../src/core/version.js';
-import { parseGoVersion, parseFlutterVersion, parseNodeVersion } from '../src/core/version.js';
+import { parseGoVersion, parseFlutterVersion, parseNodeVersion, parseMinicondaVersion } from '../src/core/version.js';
 import type { ResolvedArtifact } from '../src/vendor/types.js';
 
 function artifact(url: string, vendorId: string = 'temurin'): ResolvedArtifact {
@@ -152,5 +152,36 @@ describe('applyMirror nodejs', () => {
 
   it('no mirror → untouched', () => {
     expect(applyMirror(nodeArtifact(), lin, null).downloadUrl).toBe(NODE_URL);
+  });
+});
+
+describe('applyMirror miniconda', () => {
+  const mac = { os: 'mac' as const, arch: 'aarch64' as const };
+  const official =
+    'https://repo.anaconda.com/miniconda/Miniconda3-py313_26.7.1-1-MacOSX-arm64.sh';
+
+  function minicondaArtifact(): ResolvedArtifact {
+    return {
+      vendorId: 'miniconda',
+      version: parseMinicondaVersion('miniconda', 'py313_26.7.1-1'),
+      dirName: 'miniconda-py313_26.7.1-1',
+      displayName: 'Miniconda py313_26.7.1-1',
+      downloadUrl: official,
+      checksum: { kind: 'sha256', expected: 'ab'.repeat(32) },
+      archive: 'sh',
+    };
+  }
+
+  it('rewrites only the miniconda prefix and keeps the expected hash', () => {
+    const detail = applyMirrorDetail(
+      minicondaArtifact(),
+      mac,
+      'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/',
+    );
+    expect(detail.applied).toBe(true);
+    expect(detail.artifact.downloadUrl).toBe(
+      'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py313_26.7.1-1-MacOSX-arm64.sh',
+    );
+    expect(detail.artifact.checksum).toEqual({ kind: 'sha256', expected: 'ab'.repeat(32) });
   });
 });

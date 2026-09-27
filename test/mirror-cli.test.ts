@@ -73,6 +73,9 @@ describe('mirror presets', () => {
 
     const maven = listMirrorSitesForType('maven').map((s) => s.name);
     expect(maven).toEqual(['aliyun', 'huawei', 'official']);
+
+    const miniconda = listMirrorSitesForType('miniconda').map((s) => s.name);
+    expect(miniconda).toEqual(['nju', 'tuna', 'ustc', 'official']);
   });
 
   it('scopes vendor URLs per type', () => {
@@ -172,6 +175,14 @@ describe('mirrorCommand use / ls / current', () => {
     expect(lines.some((l) => l.startsWith('* custom') && l.includes('golang.google.cn'))).toBe(
       true,
     );
+  });
+
+  it('use tuna on miniconda writes the installer directory, not a conda channel', () => {
+    mirrorCommand('miniconda', 'use', 'tuna', undefined);
+    expect(loadConfig().mirror.miniconda).toBe('https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda');
+    expect(loadConfig().mirror.miniconda).not.toContain('/pkgs/');
+    expect(loadConfig().mirror.nodejs).toBeUndefined();
+    expect(() => mirrorCommand('miniconda', 'use', 'aliyun', undefined)).toThrow(/unsupported mirror site/i);
   });
 
   it('use aliyun on maven writes the Central root', () => {

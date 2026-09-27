@@ -1,7 +1,7 @@
 import type { SdkTypeId } from '../sdk/types.js';
 
 /** 支持镜像的 vendor id（与 applyMirror / 历史 RECOMMENDED 对齐） */
-export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven';
+export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven' | 'miniconda';
 
 export interface MirrorSite {
   name: string;
@@ -19,12 +19,15 @@ export const MIRRORABLE_BY_TYPE: Record<SdkTypeId, readonly MirrorVendorId[]> = 
   flutter: ['flutter'],
   node: ['nodejs'],
   maven: ['maven'],
+  miniconda: ['miniconda'],
 };
 
 /**
  * 内置镜像站。只收录与 applyMirror 路径约定兼容、且站方/文档可对上的根 URL。
  * tuna 不含 nodejs：TUNA nodejs-release 归档不全。
  * nju / tuna 不含 maven：它们的 Apache 发行目录不是 Maven Central 路径。
+ * miniconda 只收录安装器目录（Miniconda3-*.sh / .exe），不是 pkgs/ 频道。
+ * aliyun 的 /anaconda/miniconda 返回 404，不收录。
  */
 export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
   {
@@ -35,6 +38,7 @@ export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
       golang: 'https://mirror.nju.edu.cn/golang',
       flutter: 'https://mirror.nju.edu.cn/flutter/flutter_infra_release',
       nodejs: 'https://mirror.nju.edu.cn/nodejs-release',
+      miniconda: 'https://mirror.nju.edu.cn/anaconda/miniconda',
     },
   },
   {
@@ -44,6 +48,7 @@ export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
     vendors: {
       temurin: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium',
       flutter: 'https://mirrors.tuna.tsinghua.edu.cn/flutter/flutter_infra_release',
+      miniconda: 'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda',
     },
   },
   {
@@ -62,6 +67,13 @@ export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
     vendors: {
       nodejs: 'https://repo.huaweicloud.com/nodejs',
       maven: 'https://repo.huaweicloud.com/repository/maven',
+    },
+  },
+  {
+    name: 'ustc',
+    list: true,
+    vendors: {
+      miniconda: 'https://mirrors.ustc.edu.cn/anaconda/miniconda',
     },
   },
   {

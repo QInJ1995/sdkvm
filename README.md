@@ -12,7 +12,7 @@
 
 中文 | [English](./README.en.md)
 
-管理 **Java JDK**、**Go 工具链**、**Flutter SDK**、**Node.js 运行时**与 **Apache Maven**。
+管理 **Java JDK**、**Go 工具链**、**Flutter SDK**、**Node.js 运行时**、**Apache Maven** 与 **Miniconda**。
 
 </div>
 
@@ -45,13 +45,14 @@
 | Flutter | 官方发布清单                                                                                                            | stable / beta；macOS 双架构，Linux / Windows 仅 x64              |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist)                                                                              | `lts`（当前 24 Krypton）/ `latest` / 按 major 线；npm 随版本切换 |
 | Maven   | [Maven Central](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/)                                    | `3` / `3.9` / `latest` 取稳定版；预发布只能精确安装             |
+| Miniconda | [repo.anaconda.com/miniconda](https://repo.anaconda.com/miniconda/) | `26` / `26.7` / `py313` / `py313_26.7.1-1` / `latest`；安装器约 150 MB |
 
 行为约定：
 
-- 各 SDK 目录隔离，`JAVA_HOME`、`GO_HOME`、`FLUTTER_HOME`、`NODE_HOME`、`MAVEN_HOME` 互不覆盖。
+- 各 SDK 目录隔离，`JAVA_HOME`、`GO_HOME`、`FLUTTER_HOME`、`NODE_HOME`、`MAVEN_HOME`、`MINICONDA_HOME` 互不覆盖。
 - `use` 只改一个符号链接（Windows 为 junction），不搬移已安装的文件。
-- 下载地址由官方 API 解析。Go、Flutter、Node.js 强制校验 SHA-256；Maven 强制校验官方 SHA-512；Java 各源尽力校验。
-- Temurin、Go、Flutter、Node.js、Maven 可配置镜像。校验和仍取自官方清单。
+- 下载地址由官方 API 或官方目录页解析。Go、Flutter、Node.js、Miniconda 强制校验 SHA-256；Maven 强制校验官方 SHA-512；Java 各源尽力校验。
+- Temurin、Go、Flutter、Node.js、Maven、Miniconda 可配置镜像。校验和仍取自官方清单。`sdkvm miniconda mirror` 只决定 sdkvm 从哪里下载 Miniconda 本身，不改 conda 拉包频道。
 - 新增语言只需实现一个厂商模块，见[开发](#开发)。
 
 ## 系统要求
@@ -67,6 +68,7 @@
 - Linux 解压 Flutter（`.tar.xz`）需要 `xz`（`xz-utils`）。主流发行版默认自带。
 - Flutter 官方在 Linux / Windows 只发布 x64 归档。ARM Linux 与 ARM Windows 无法安装。macOS 两种架构都支持。
 - `flutter` 首次运行会构建内部 cache，耗时较久属于正常现象。
+- Miniconda 安装器约 150 MB，静默安装视为接受 [Miniconda 条款](https://www.anaconda.com/legal)。Windows 安装路径不能含空格（含空格时请把 `SDKVM_HOME` 指到无空格目录）。Windows 仅 x64；macOS 双架构，Linux x64 与 aarch64 都支持。较新的版本可能只发布其中一部分平台。
 
 ## 安装
 
@@ -138,7 +140,7 @@ bun add -g sdkvm
 
 ## 快速开始
 
-Java 可用裸命令（与 `sdkvm java` 等价）；Go / Flutter / Node / Maven 用子命令。
+Java 可用裸命令（与 `sdkvm java` 等价）；Go / Flutter / Node / Maven / Miniconda 用子命令。
 
 ```sh
 # 可选：国内加速（按 SDK 类型分别设置，互不影响）
@@ -147,6 +149,7 @@ sdkvm go mirror use nju
 sdkvm flutter mirror use nju
 sdkvm node mirror use nju
 sdkvm maven mirror use aliyun
+sdkvm miniconda mirror use tuna   # 只改 sdkvm 下载 Miniconda 的地址
 sdkvm nrm use taobao          # 仅影响 npm install，与上面的 mirror 无关
 sdkvm mrm use aliyun          # 仅影响 mvn 拉依赖，写入 settings.xml
 
@@ -175,6 +178,11 @@ sdkvm maven install 3.9
 sdkvm maven use 3.9
 mvn -version
 
+# Miniconda（安装器约 150 MB）
+sdkvm miniconda install 26.7
+sdkvm miniconda use 26.7
+conda --version
+
 # 查看与卸载
 sdkvm current
 sdkvm java install 21 --vendor zulu
@@ -190,7 +198,7 @@ sdkvm uninstall zulu-21
 
 ## 命令参考
 
-Java 使用裸命令（`sdkvm install`）或 `sdkvm java`，两者等价。Go、Flutter、Node.js、Maven 分别使用 `sdkvm go`、`sdkvm flutter`、`sdkvm node`、`sdkvm maven`。
+Java 使用裸命令（`sdkvm install`）或 `sdkvm java`，两者等价。Go、Flutter、Node.js、Maven、Miniconda 分别使用 `sdkvm go`、`sdkvm flutter`、`sdkvm node`、`sdkvm maven`、`sdkvm miniconda`。
 
 ### 命令速查
 
@@ -204,7 +212,7 @@ Java 使用裸命令（`sdkvm install`）或 `sdkvm java`，两者等价。Go、
 | `sdkvm mirror ls\|use\|current\|show\|set\|unset` | 管理 SDK 下载镜像站 / URL（安装包，不是 npm 包源） |
 | `sdkvm nrm ls\|use\|current\|add\|del\|test`      | 管理用户级 npm registry（类似 nrm）                |
 | `sdkvm mrm ls\|use\|current\|add\|del\|test\|settings` | 管理 Maven 依赖镜像（`settings.xml`，类似 nrm） |
-| `sdkvm java\|go\|flutter\|node\|maven …`          | 各 SDK 的完整命令组                                |
+| `sdkvm java\|go\|flutter\|node\|maven\|miniconda …` | 各 SDK 的完整命令组                                |
 | `sdkvm version`                                   | 打印 CLI 版本（同 `sdkvm --version`）              |
 | `sdkvm upgrade`                                   | 升级 CLI。见[升级](#升级)                          |
 
@@ -216,6 +224,7 @@ sdkvm go      install latest | 1.24 | 1.24.5 | golang-1.24
 sdkvm flutter install latest | 3.47 | 3.47.5 | 3.49.0-0.1.pre | flutter-3.47
 sdkvm node    install lts | latest | 22 | 22.20.0 | nodejs-22.20.0
 sdkvm maven   install latest | 3 | 3.9 | 3.9.9 | 4.0.0-rc-4 | maven-3.9
+sdkvm miniconda install latest | 26 | 26.7 | 26.7.1-1 | py313 | py313_26.7.1-1
 ```
 
 ### `sdkvm install <version>`
@@ -233,14 +242,14 @@ sdkvm switch to it: sdkvm use 21
 
 | 选项            | 说明                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------- |
-| `--vendor <id>` | Java：`temurin`（默认）/ `zulu` / `corretto`。Go 为 `golang`，Flutter 为 `flutter`，Node.js 为 `nodejs`，Maven 为 `maven` |
+| `--vendor <id>` | Java：`temurin`（默认）/ `zulu` / `corretto`。Go 为 `golang`，Flutter 为 `flutter`，Node.js 为 `nodejs`，Maven 为 `maven`，Miniconda 为 `miniconda` |
 | `--force`       | 已安装时删除并重装。默认跳过已安装版本                                                                  |
 
 校验失败或解压异常时，半成品目录和缓存会被清掉。下载超时是 60 秒无数据，不是总时长上限。
 
 ### `sdkvm use <version>`
 
-在已安装版本中匹配，并更新对应的 `current-*` 链接与 `JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` / `MAVEN_HOME` / `PATH`。
+在已安装版本中匹配，并更新对应的 `current-*` 链接与 `JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` / `MAVEN_HOME` / `MINICONDA_HOME` / `PATH`。
 
 ```sh
 sdkvm use 21
@@ -249,6 +258,7 @@ sdkvm go use 1.24.5
 sdkvm flutter use 3.47.5
 sdkvm node use 22.20.0
 sdkvm maven use 3.9
+sdkvm miniconda use 26.7
 ```
 
 macOS / Linux 上，首次 `use` 会向 shell 配置追加初始化块，重开终端或 `source ~/.zshrc` 后生效。之后的切换只改链接。IDE 需要重启才会读到新的环境变量。Maven 需要 JDK：没有 `JAVA_HOME` 时会提示先 `sdkvm java use`。详见[切换机制](#切换机制)。
@@ -293,6 +303,8 @@ node: nodejs-22.20.0
   NODE_HOME → ~/.sdkvm/nodes/nodejs-22.20.0
 maven: maven-3.9.9
   MAVEN_HOME → ~/.sdkvm/mavens/maven-3.9.9
+miniconda: miniconda-py313_26.7.1-1
+  MINICONDA_HOME → ~/.sdkvm/minicondas/miniconda-py313_26.7.1-1
 ```
 
 ### `sdkvm uninstall <version>`
@@ -301,7 +313,7 @@ maven: maven-3.9.9
 
 ### `sdkvm mirror`
 
-按 SDK 类型管理**安装包下载镜像**（不是 npm 包源）。Java：`sdkvm mirror`；其余：`sdkvm go|flutter|node|maven mirror`。作用域互不影响。
+按 SDK 类型管理**下载该 SDK 的镜像**（不是 npm 包源，也不是 conda 频道）。Java：`sdkvm mirror`；其余：`sdkvm go|flutter|node|maven|miniconda mirror`。作用域互不影响。`sdkvm miniconda mirror` 只决定 sdkvm 从哪里下载 Miniconda 本身。
 
 ```sh
 sdkvm mirror ls
@@ -356,14 +368,14 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 
 `install`、`use`、`uninstall` 共用下表。未列出的组合会被拒绝并给出改写提示。
 
-| 语法             | Java             | Go                  | Flutter                        | Node.js                        | Maven                          | 示例                                                              |
-| ---------------- | ---------------- | ------------------- | ------------------------------ | ------------------------------ | ------------------------------ | ----------------------------------------------------------------- |
-| `<major>`        | 该大版本最新补丁 | —                   | —                              | 该 major 最新                  | 该 major 最新稳定版            | `21`、`22`、`3`                                                   |
-| `<major.minor>`  | —                | 该 minor 线最新补丁 | stable 通道该 minor 线最新补丁 | —                              | 该 minor 线最新稳定版          | `1.24`、`3.47`、`3.9`                                             |
-| `lts`            | 最新 LTS 大版本  | —                   | —                              | 最新 LTS 线（当前 24 Krypton） | —                              | `lts`                                                             |
-| `latest`         | —                | 最新稳定版          | stable 最新，不含 beta         | 最新 Current                   | 最高稳定版，不含预发布         | `latest`                                                          |
-| `<full-version>` | 精确版本或前缀   | 精确版本            | 精确版本，可含 prerelease      | 精确版本                       | 精确版本，可含预发布           | `21.0.5+11`、`1.24.5`、`3.49.0-0.1.pre`、`22.20.0`、`4.0.0-rc-4` |
-| `<vendor>-…`     | 限定发行版       | 同左                | 同左                           | 同左                           | 同左                           | `zulu-21`、`golang-1.24`、`nodejs-22.20.0`、`maven-3.9.9`         |
+| 语法             | Java             | Go                  | Flutter                        | Node.js                        | Maven                          | Miniconda                | 示例                                                              |
+| ---------------- | ---------------- | ------------------- | ------------------------------ | ------------------------------ | ------------------------------ | ----------------------- | ----------------------------------------------------------------- |
+| `<major>`        | 该大版本最新补丁 | —                   | —                              | 该 major 最新                  | 该 major 最新稳定版            | 该 major 最新           | `21`、`22`、`3`、`26`                                             |
+| `<major.minor>`  | —                | 该 minor 线最新补丁 | stable 通道该 minor 线最新补丁 | —                              | 该 minor 线最新稳定版          | 该 minor 线最新         | `1.24`、`3.47`、`3.9`、`26.7`                                     |
+| `lts`            | 最新 LTS 大版本  | —                   | —                              | 最新 LTS 线（当前 24 Krypton） | —                              | —                       | `lts`                                                             |
+| `latest`         | —                | 最新稳定版          | stable 最新，不含 beta         | 最新 Current                   | 最高稳定版，不含预发布         | 当前平台最新安装器      | `latest`                                                          |
+| `<full-version>` | 精确版本或前缀   | 精确版本            | 精确版本，可含 prerelease      | 精确版本                       | 精确版本，可含预发布           | 构建号或 Python 标签    | `21.0.5+11`、`1.24.5`、`22.20.0`、`py313_26.7.1-1`                |
+| `<vendor>-…`     | 限定发行版       | 同左                | 同左                           | 同左                           | 同左                           | 同左                    | `zulu-21`、`maven-3.9.9`、`miniconda-py313_26.7.1-1`              |
 
 匹配规则：
 
@@ -373,6 +385,7 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 - Maven 只收录 3.0 及以上的稳定版 `x.y.z`。`latest`、`3`、`3.9` 不含预发布；安装 `4.0.0-rc-4` 这类版本必须写完整串。Maven 没有 `lts`。
 - Java 的 `lts` 与 Adoptium 列表对齐，当前为 8 / 11 / 17 / 21 / 25。Node.js 的 `lts` 取官方 `index.json` 里最新带 LTS 代号的条目。
 - Node.js 不接受 `22.20` 这种两段式，应写成 `22` 或 `22.20.0`。
+- Miniconda 版本如 `py313_26.7.1-1`。`26` 取该 major 最新，`26.7` 取该 minor 线最新，`26.7.1-1` 取该构建里最高的 Python，`py313` 取该 Python 的最新安装器，`py313_26.7.1-1` 精确到 Python 和构建。没有 `lts`。忽略文件名里的 `latest` 别名。
 - 省略厂商前缀时使用默认发行版。只有 Java 可以配置默认厂商，见[配置文件](#配置文件)。
 
 ## 工作原理
@@ -388,11 +401,13 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 ├── flutters/        # Flutter：flutter-3.47.5
 ├── nodes/           # Node.js：nodejs-22.20.0
 ├── mavens/          # Maven：maven-3.9.9
+├── minicondas/       # Miniconda：miniconda-py313_26.7.1-1
 ├── current-java     # JAVA_HOME 链接（Windows 为 junction）
 ├── current-go
 ├── current-flutter
 ├── current-node
 ├── current-maven
+├── current-miniconda
 ├── runtime/         # 脚本安装的 CLI 运行时，与 current-node 隔离
 ├── cli/             # 脚本安装的 CLI 包
 ├── bin/             # 脚本安装的入口 sdkvm（需加入 PATH）
@@ -401,11 +416,11 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 └── tmp/             # 解压临时目录，同样会删除
 ```
 
-解压后的大致体积：Java 约 300 MB，Go 约 250 MB，Node.js 约 100 MB（含捆绑 npm），Maven 约 10 MB，Flutter 数 GB（压缩包约 1–2.2 GB）。
+解压后的大致体积：Java 约 300 MB，Go 约 250 MB，Node.js 约 100 MB（含捆绑 npm），Maven 约 10 MB，Miniconda 安装器约 150 MB，Flutter 数 GB（压缩包约 1–2.2 GB）。
 
 ### 切换机制
 
-macOS / Linux 上，`current-*` 是指向当前版本目录的符号链接。首次 `use` 会向 shell 配置追加带标记的块：zsh 写入 `~/.zshrc`，bash 写入 `~/.bash_profile` 或 `~/.bashrc`。五种 SDK 各一块。
+macOS / Linux 上，`current-*` 是指向当前版本目录的符号链接。首次 `use` 会向 shell 配置追加带标记的块：zsh 写入 `~/.zshrc`，bash 写入 `~/.bash_profile` 或 `~/.bashrc`。六种 SDK 各一块。Miniconda 的块还会 source `conda.sh`，这样 `conda activate` 可用。
 
 ```sh
 # >>> sdkvm java init >>>
@@ -432,11 +447,19 @@ case ":$PATH:" in *":$NODE_HOME/bin:"*) ;; *) export PATH="$NODE_HOME/bin:$PATH"
 export MAVEN_HOME="$HOME/.sdkvm/current-maven"
 case ":$PATH:" in *":$MAVEN_HOME/bin:"*) ;; *) export PATH="$MAVEN_HOME/bin:$PATH";; esac
 # <<< sdkvm maven init <<<
+
+# >>> sdkvm miniconda init >>>
+export MINICONDA_HOME="$HOME/.sdkvm/current-miniconda"
+case ":$PATH:" in *":$MINICONDA_HOME/bin:"*) ;; *) export PATH="$MINICONDA_HOME/bin:$PATH";; esac
+export CONDA_EXE="$MINICONDA_HOME/bin/conda"
+export CONDA_PYTHON_EXE="$MINICONDA_HOME/bin/python"
+[ -f "$MINICONDA_HOME/etc/profile.d/conda.sh" ] && . "$MINICONDA_HOME/etc/profile.d/conda.sh"
+# <<< sdkvm miniconda init <<<
 ```
 
 环境变量指向链接。之后的 `use` 只改链接，新终端会读到新值。
 
-Windows 上，五个 `current-*` 都是 junction。`use` 把用户级环境变量写成 `REG_EXPAND_SZ`，保留 `%VAR%` 引用，避免 `setx` 的 1024 字符截断。PATH 追加 `%JAVA_HOME%\bin`、`%GO_HOME%\bin`、`%FLUTTER_HOME%\bin`、`%MAVEN_HOME%\bin`。Node.js 的 Windows 归档没有 `bin/`，PATH 项是 `%NODE_HOME%` 本身。需要重开终端或重启 IDE。
+Windows 上，六个 `current-*` 都是 junction。`use` 把用户级环境变量写成 `REG_EXPAND_SZ`，保留 `%VAR%` 引用，避免 `setx` 的 1024 字符截断。PATH 追加 `%JAVA_HOME%\bin`、`%GO_HOME%\bin`、`%FLUTTER_HOME%\bin`、`%MAVEN_HOME%\bin`。Node.js 的 Windows 归档没有 `bin/`，PATH 项是 `%NODE_HOME%` 本身。Miniconda 追加 `%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、`%MINICONDA_HOME%\Library\bin`。需要重开终端或重启 IDE。PowerShell 里的 `conda activate` 不在本次范围内。
 
 ## 配置
 
@@ -494,7 +517,7 @@ Windows 上，五个 `current-*` 都是 junction。`use` 把用户级环境变�
 
 |        | `sdkvm mirror`                                      | `sdkvm nrm`         | `sdkvm mrm`                          |
 | ------ | --------------------------------------------------- | ------------------- | ------------------------------------ |
-| 改什么 | JDK / Go / Flutter / Node / Maven **安装包**下载地址 | **npm 包** registry | Maven **依赖 / 插件**仓库            |
+| 改什么 | JDK / Go / Flutter / Node / Maven / Miniconda 的下载地址 | **npm 包** registry | Maven **依赖 / 插件**仓库            |
 | 影响   | `sdkvm … install`                                   | `npm install`       | `mvn` 解析依赖（读 `settings.xml`） |
 | 作用域 | 按 SDK 类型分别设置                                 | 用户级全局          | 一份 `settings.xml`                  |
 
@@ -508,15 +531,19 @@ sdkvm go mirror use nju
 sdkvm flutter mirror use nju
 sdkvm node mirror use nju
 sdkvm maven mirror use aliyun
+sdkvm miniconda mirror use tuna
 ```
 
-| 站点       | Java (temurin) | Go         | Flutter    | Node.js               | Maven      |
-| ---------- | -------------- | ---------- | ---------- | --------------------- | ---------- |
-| `nju`      | ✓              | ✓          | ✓          | ✓                     | —          |
-| `tuna`     | ✓              | —          | ✓          | —（归档不全，未收录） | —          |
-| `aliyun`   | —              | ✓          | —          | ✓                     | ✓          |
-| `huawei`   | —              | —          | —          | ✓                     | ✓          |
-| `official` | 清空本类型     | 清空本类型 | 清空本类型 | 清空本类型            | 清空本类型 |
+`sdkvm miniconda mirror` 只切换 sdkvm 下载 Miniconda 本身的来源。不写 `.condarc`，也不改 `conda install` 的频道。阿里云没有 Miniconda 安装器目录，所以不在列表里。
+
+| 站点       | Java (temurin) | Go         | Flutter    | Node.js               | Maven      | Miniconda |
+| ---------- | -------------- | ---------- | ---------- | --------------------- | ---------- | -------- |
+| `nju`      | ✓              | ✓          | ✓          | ✓                     | —          | ✓        |
+| `tuna`     | ✓              | —          | ✓          | —（归档不全，未收录） | —          | ✓        |
+| `aliyun`   | —              | ✓          | —          | ✓                     | ✓          | —        |
+| `huawei`   | —              | —          | —          | ✓                     | ✓          | —        |
+| `ustc`     | —              | —          | —          | —                     | —          | ✓        |
+| `official` | 清空本类型     | 清空本类型 | 清空本类型 | 清空本类型            | 清空本类型 | 清空本类型 |
 
 手填 URL 或临时覆盖：
 
@@ -627,7 +654,7 @@ rm -rf ~/.sdkvm/bin ~/.sdkvm/cli ~/.sdkvm/runtime
 
 Windows 对应删除 `%USERPROFILE%\.sdkvm\bin\sdkvm.cmd`，以及 `%USERPROFILE%\.sdkvm\cli` 与 `%USERPROFILE%\.sdkvm\runtime`，并从用户 PATH 移除 `%USERPROFILE%\.sdkvm\bin`。
 
-确认不再需要已安装的 JDK、Go、Flutter、Node.js、Maven 之后，再删除数据目录：
+确认不再需要已安装的 JDK、Go、Flutter、Node.js、Maven、Miniconda 之后，再删除数据目录：
 
 ```sh
 rm -rf ~/.sdkvm
@@ -636,9 +663,9 @@ rm -rf ~/.sdkvm
 同时删除 shell 配置里：
 
 - `# >>> sdkvm path >>>` … `# <<< sdkvm path <<<`
-- 各 SDK 的 `>>> sdkvm java|go|flutter|node|maven init >>>` … `<<< … <<<`
+- 各 SDK 的 `>>> sdkvm java|go|flutter|node|maven|miniconda init >>>` … `<<< … <<<`
 
-Windows 还需要在系统设置中删除 `JAVA_HOME`、`GO_HOME`、`FLUTTER_HOME`、`NODE_HOME`、`MAVEN_HOME`，并从用户 PATH 移除 `%JAVA_HOME%\bin`、`%GO_HOME%\bin`、`%FLUTTER_HOME%\bin`、`%NODE_HOME%`、`%MAVEN_HOME%\bin`。
+Windows 还需要在系统设置中删除 `JAVA_HOME`、`GO_HOME`、`FLUTTER_HOME`、`NODE_HOME`、`MAVEN_HOME`、`MINICONDA_HOME`，并从用户 PATH 移除 `%JAVA_HOME%\bin`、`%GO_HOME%\bin`、`%FLUTTER_HOME%\bin`、`%NODE_HOME%`、`%MAVEN_HOME%\bin`、`%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、`%MINICONDA_HOME%\Library\bin`。
 
 ## 开发
 
@@ -656,8 +683,8 @@ npm run build
 src/
 ├── cli/       # install / use / ls / uninstall / mirror / nrm / upgrade
 ├── core/      # 版本解析、注册表、配置、文件锁
-├── sdk/       # java / go / flutter / node / maven 的目录、环境变量、版本语法
-├── vendor/    # temurin / zulu / corretto / golang / flutter / nodejs / maven 与镜像改写
+├── sdk/       # java / go / flutter / node / maven / miniconda 的目录、环境变量、版本语法
+├── vendor/    # temurin / zulu / corretto / golang / flutter / nodejs / maven / miniconda 与镜像改写
 ├── fs/        # 解压、目录归一化、链接
 ├── shell/     # rc 写入、Windows 注册表
 ├── net/       # fetch、流式下载、校验

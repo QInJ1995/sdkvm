@@ -28,7 +28,8 @@ export interface ResolvedArtifact {
    * sha256：Go / Flutter / Node / Java。sha512：较新的 Maven Central 旁路；更早的 Maven 只有 .sha1。
    */
   checksum: { kind: 'sha256' | 'sha512'; url?: string; expected?: string } | null;
-  archive: 'tar.gz' | 'tar.xz' | 'zip';
+  /** sh / exe 是 Miniconda 静默安装器，不走 tar/zip 解压 */
+  archive: 'tar.gz' | 'tar.xz' | 'zip' | 'sh' | 'exe';
 }
 
 export interface Vendor {

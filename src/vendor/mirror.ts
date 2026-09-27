@@ -1,7 +1,7 @@
 import type { ResolvedArtifact, VendorPlatform } from './types.js';
 
 /** 支持 applyMirror 改写的 vendor（与 mirror-presets 对齐） */
-export const MIRROR_REWRITE_VENDORS = new Set(['temurin', 'golang', 'flutter', 'nodejs', 'maven']);
+export const MIRROR_REWRITE_VENDORS = new Set(['temurin', 'golang', 'flutter', 'nodejs', 'maven', 'miniconda']);
 
 /**
  * mirror 仅替换 tarball 下载 URL（metadata 始终走官方 API）。按 vendor 分派策略：
@@ -10,6 +10,7 @@ export const MIRROR_REWRITE_VENDORS = new Set(['temurin', 'golang', 'flutter', '
  * - flutter：官方桶前缀替换 storage.googleapis.com/flutter_infra_release → {root}（已验证镜像：https://mirror.nju.edu.cn/flutter/flutter_infra_release）
  * - nodejs：官方分发根前缀替换 nodejs.org/dist → {root}（已验证镜像：https://mirror.nju.edu.cn/nodejs-release）
  * - maven：官方仓库根前缀替换 repo.maven.apache.org/maven2 → {root}（已验证：阿里云 central、华为云 maven）
+ * - miniconda：官方安装器目录前缀替换 repo.anaconda.com/miniconda → {root}（只换 sdkvm 下载 Miniconda 的地址）
  */
 export function applyMirror(
   artifact: ResolvedArtifact,
@@ -46,6 +47,11 @@ export function applyMirrorDetail(
   }
   if (artifact.vendorId === 'maven') {
     const url = artifact.downloadUrl.replace(/^https:\/\/repo\.maven\.apache\.org\/maven2/, root);
+    if (url === artifact.downloadUrl) return { artifact, applied: false };
+    return { artifact: { ...artifact, downloadUrl: url }, applied: true };
+  }
+  if (artifact.vendorId === 'miniconda') {
+    const url = artifact.downloadUrl.replace(/^https:\/\/repo\.anaconda\.com\/miniconda/, root);
     if (url === artifact.downloadUrl) return { artifact, applied: false };
     return { artifact: { ...artifact, downloadUrl: url }, applied: true };
   }

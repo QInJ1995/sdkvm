@@ -12,7 +12,9 @@ import { applyMirrorDetail, checksumSidecarFallback, MIRROR_REWRITE_VENDORS } fr
 import { downloadFile, cacheFileName } from '../net/download.js';
 import { hashFile, verifyChecksum } from '../net/checksum.js';
 import { extractArchive, tmpExtractDir } from '../fs/extract.js';
+import { assertInstallerPrefix, runSilentInstaller } from '../fs/installer.js';
 import { normalizeExtracted } from '../fs/layout.js';
+import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
 import { createProgress } from '../ui/progress.js';
 import { cmdPath } from './cmdname.js';
@@ -38,7 +40,8 @@ export async function installCommand(
 ): Promise<void> {
   const platform = detectPlatform();
   const config = loadConfig();
-  const { vendor: specVendor, spec } = getSdkType(type).parseUserSpec(specInput);
+  const sdk = getSdkType(type);
+  const { vendor: specVendor, spec } = sdk.parseUserSpec(specInput);
   const vendorId = resolveVendorId(type, specVendor ?? opts.vendor, config);
   const vendor = getVendor(type, vendorId);
 
@@ -59,11 +62,14 @@ export async function installCommand(
   }
 
   const finalDir = path.join(paths.sdks(type), artifact.dirName);
-  // java/node：major；go/flutter/maven：minor 线（1.24 / 3.47 / 3.9）。node 不接受 major.minor。
+  // java/node：major；go/flutter/maven：minor 线（1.24 / 3.47 / 3.9）。
+  // miniconda 同一条 minor 线上有多个 Python，提示完整版本，避免 use 26.7 切到刚装的那一个之外。
   const hintVersion =
-    type === 'java' || type === 'node'
-      ? String(artifact.version.major)
-      : `${artifact.version.major}.${artifact.version.minor}`;
+    type === 'miniconda'
+      ? sdk.formatVersion(artifact.version)
+      : type === 'java' || type === 'node'
+        ? String(artifact.version.major)
+        : `${artifact.version.major}.${artifact.version.minor}`;
 
   await withLock(async () => {
     ensureLayout();
@@ -81,6 +87,10 @@ export async function installCommand(
       if (f.endsWith('.part')) fs.rmSync(path.join(paths.cache(), f), { force: true });
     }
 
+    if (artifact.archive === 'sh' || artifact.archive === 'exe') {
+      assertInstallerPrefix(finalDir, platform.os);
+    }
+
     const dest = path.join(paths.cache(), cacheFileName(artifact.downloadUrl));
     const progress = createProgress(`↓ ${artifact.displayName}`);
     log.info(`downloading ${artifact.downloadUrl}`);
@@ -94,20 +104,35 @@ export async function installCommand(
       : undefined;
     await verifyChecksum(artifact, actual, { strict: applied, fallbackUrl, file: dest });
 
-    const tmp = tmpExtractDir(paths.tmp());
     const bak = `${finalDir}.bak`;
-    let finalTmp = tmp;
-    try {
-      log.info('extracting ...');
-      await extractArchive(dest, artifact.archive, tmp, platform);
-      const normalized = normalizeExtracted(tmp, platform, type);
-      finalTmp = normalized.root;
-      fs.rmSync(bak, { recursive: true, force: true });
-      if (fs.existsSync(finalDir)) fs.renameSync(finalDir, bak);
+    if (artifact.archive === 'sh' || artifact.archive === 'exe') {
+      // 安装器把 prefix 写进 shebang / conda-meta。先装到临时目录再改名会留下错误路径。
+      const existed = fs.existsSync(finalDir);
+      let moved = false;
       try {
-        await renameWithRetry(normalized.root, finalDir);
+        fs.rmSync(bak, { recursive: true, force: true });
+        if (existed) {
+          fs.renameSync(finalDir, bak);
+          moved = true;
+        }
+        log.info('running installer ...');
+        await runSilentInstaller(dest, artifact.archive, finalDir, platform.os);
+        const normalized = normalizeExtracted(finalDir, platform, type);
+        if (path.resolve(normalized.root) !== path.resolve(finalDir)) {
+          throw new SdkvmError(`Miniconda installer did not populate ${finalDir}`, {
+            hint: `expected the prefix itself, found ${normalized.root}`,
+          });
+        }
+        fs.rmSync(bak, { recursive: true, force: true });
       } catch (err) {
-        if (fs.existsSync(bak) && !fs.existsSync(finalDir)) {
+        if (moved || !existed) {
+          try {
+            fs.rmSync(finalDir, { recursive: true, force: true });
+          } catch {
+            // 删不掉半成品时保留 bak，把安装器的错误抛回去
+          }
+        }
+        if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
           try {
             fs.renameSync(bak, finalDir);
           } catch {
@@ -115,16 +140,41 @@ export async function installCommand(
           }
         }
         throw err;
+      } finally {
+        fs.rmSync(dest, { force: true });
       }
-      fs.rmSync(bak, { recursive: true, force: true });
-    } catch (err) {
-      fs.rmSync(finalTmp, { recursive: true, force: true });
-      fs.rmSync(tmp, { recursive: true, force: true });
-      throw err;
-    } finally {
-      fs.rmSync(dest, { force: true });
-      fs.rmSync(paths.tmp(), { recursive: true, force: true });
-      fs.mkdirSync(paths.tmp(), { recursive: true });
+    } else {
+      const tmp = tmpExtractDir(paths.tmp());
+      let finalTmp = tmp;
+      try {
+        log.info('extracting ...');
+        await extractArchive(dest, artifact.archive, tmp, platform);
+        const normalizedRoot = normalizeExtracted(tmp, platform, type).root;
+        finalTmp = normalizedRoot;
+        fs.rmSync(bak, { recursive: true, force: true });
+        if (fs.existsSync(finalDir)) fs.renameSync(finalDir, bak);
+        try {
+          await renameWithRetry(normalizedRoot, finalDir);
+        } catch (err) {
+          if (fs.existsSync(bak) && !fs.existsSync(finalDir)) {
+            try {
+              fs.renameSync(bak, finalDir);
+            } catch {
+              // 回滚失败时保留 bak
+            }
+          }
+          throw err;
+        }
+        fs.rmSync(bak, { recursive: true, force: true });
+      } catch (err) {
+        fs.rmSync(finalTmp, { recursive: true, force: true });
+        fs.rmSync(tmp, { recursive: true, force: true });
+        throw err;
+      } finally {
+        fs.rmSync(dest, { force: true });
+        fs.rmSync(paths.tmp(), { recursive: true, force: true });
+        fs.mkdirSync(paths.tmp(), { recursive: true });
+      }
     }
 
     log.ok(`installed ${artifact.displayName} → ${finalDir}`);

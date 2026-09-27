@@ -71,6 +71,18 @@ describe('registry', () => {
     expect(() => findInstalled('go', 'lts')).toThrow(SdkvmError);
   });
 
+  it('miniconda full spec matches python pin and build pin', () => {
+    const root = path.join(home, 'minicondas');
+    fs.mkdirSync(path.join(root, 'miniconda-py313_26.7.1-1'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'miniconda-py313_26.7.1-2'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'miniconda-py314_26.7.1-1'), { recursive: true });
+    expect(findInstalled('miniconda', 'py313').dirPath.endsWith('miniconda-py313_26.7.1-2')).toBe(true);
+    expect(findInstalled('miniconda', '26.7.1-1').dirPath.endsWith('miniconda-py314_26.7.1-1')).toBe(true);
+    expect(findInstalled('miniconda', 'py313_26.7.1-1').dirPath.endsWith('miniconda-py313_26.7.1-1')).toBe(true);
+    expect(findInstalled('miniconda', '26.7').dirPath.endsWith('miniconda-py314_26.7.1-1')).toBe(true);
+    expect(findInstalled('miniconda', '26').dirPath.endsWith('miniconda-py314_26.7.1-1')).toBe(true);
+  });
+
   it('no match throws with installed list', () => {
     mkJdk('temurin-21.0.5+11');
     try {

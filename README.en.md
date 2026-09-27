@@ -12,7 +12,7 @@
 
 [中文](./README.md) | English
 
-Manage **Java JDKs**, the **Go toolchain**, the **Flutter SDK**, the **Node.js runtime**, and **Apache Maven**.
+Manage **Java JDKs**, the **Go toolchain**, the **Flutter SDK**, the **Node.js runtime**, **Apache Maven**, and **Miniconda**.
 
 </div>
 
@@ -45,13 +45,14 @@ Manage **Java JDKs**, the **Go toolchain**, the **Flutter SDK**, the **Node.js r
 | Flutter | Official release manifest                                                                                               | stable / beta; both macOS architectures; Linux / Windows are x64 only               |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist)                                                                              | `lts` (currently 24 Krypton) / `latest` / major line; npm switches with the runtime |
 | Maven   | [Maven Central](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/)                                    | `3` / `3.9` / `latest` pick a stable release; prereleases need an exact version     |
+| Miniconda | [repo.anaconda.com/miniconda](https://repo.anaconda.com/miniconda/) | `26` / `26.7` / `py313` / `py313_26.7.1-1` / `latest`; the installer is about 150 MB |
 
 Behavior:
 
-- Each SDK lives in its own directory. `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, and `MAVEN_HOME` do not overwrite each other.
+- Each SDK lives in its own directory. `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, `MAVEN_HOME`, and `MINICONDA_HOME` do not overwrite each other.
 - `use` updates one symlink (a junction on Windows). Installed trees are not moved.
-- Download URLs come from official APIs. Go, Flutter, and Node.js require a SHA-256 match. Maven requires the official SHA-512. Java vendors are verified when a checksum is available.
-- Temurin, Go, Flutter, Node.js, and Maven accept a mirror. Checksums still come from the official manifest.
+- Download URLs come from official APIs or the official directory listing. Go, Flutter, Node.js, and Miniconda require a SHA-256 match. Maven requires the official SHA-512. Java vendors are verified when a checksum is available.
+- Temurin, Go, Flutter, Node.js, Maven, and Miniconda accept a mirror. Checksums still come from the official manifest. `sdkvm miniconda mirror` only chooses where sdkvm downloads Miniconda itself. It does not change conda package channels.
 - Adding a language means implementing one vendor module. See [Development](#development).
 
 ## Requirements
@@ -67,6 +68,7 @@ Platform limits:
 - Extracting Flutter (`.tar.xz`) on Linux needs `xz` (`xz-utils`). Mainstream distributions include it.
 - Official Flutter archives for Linux and Windows are x64 only. ARM Linux and ARM Windows cannot install Flutter. Both macOS architectures are supported.
 - The first `flutter` run builds an internal cache. That wait is expected.
+- Miniconda installers are about 150 MB. A silent install accepts the [Miniconda terms](https://www.anaconda.com/legal). The Windows install path cannot contain spaces; point `SDKVM_HOME` at a path without spaces. Windows is x64 only. macOS supports both architectures. Linux supports x64 and aarch64. A newer release may omit some of those platforms.
 
 ## Install
 
@@ -138,7 +140,7 @@ The data directory is independent of a CLI upgrade. A script install can also be
 
 ## Quick start
 
-Java accepts bare commands (same as `sdkvm java`). Go, Flutter, Node, and Maven use subcommands.
+Java accepts bare commands (same as `sdkvm java`). Go, Flutter, Node, Maven, and Miniconda use subcommands.
 
 ```sh
 # Optional: faster downloads in China (scoped per SDK type)
@@ -147,6 +149,7 @@ sdkvm go mirror use nju
 sdkvm flutter mirror use nju
 sdkvm node mirror use nju
 sdkvm maven mirror use aliyun
+sdkvm miniconda mirror use tuna   # where sdkvm downloads Miniconda; not conda channels
 sdkvm nrm use taobao          # npm install only; independent of mirror above
 sdkvm mrm use aliyun          # mvn dependency downloads only; writes settings.xml
 
@@ -175,6 +178,11 @@ sdkvm maven install 3.9
 sdkvm maven use 3.9
 mvn -version
 
+# Miniconda (the installer is about 150 MB)
+sdkvm miniconda install 26.7
+sdkvm miniconda use 26.7
+conda --version
+
 # Inspect and remove
 sdkvm current
 sdkvm java install 21 --vendor zulu
@@ -190,7 +198,7 @@ Day-to-day: `install` → `use` → `current` / `ls`. Install mirrors, the npm r
 
 ## Commands
 
-Java accepts bare commands (`sdkvm install`) or `sdkvm java`. Go, Flutter, Node.js, and Maven use `sdkvm go`, `sdkvm flutter`, `sdkvm node`, and `sdkvm maven`.
+Java accepts bare commands (`sdkvm install`) or `sdkvm java`. Go, Flutter, Node.js, Maven, and Miniconda use `sdkvm go`, `sdkvm flutter`, `sdkvm node`, `sdkvm maven`, and `sdkvm miniconda`.
 
 ### Cheat sheet
 
@@ -204,7 +212,7 @@ Java accepts bare commands (`sdkvm install`) or `sdkvm java`. Go, Flutter, Node.
 | `sdkvm mirror ls\|use\|current\|show\|set\|unset` | Manage SDK download mirror sites / URLs (install archives, not the npm package registry) |
 | `sdkvm nrm ls\|use\|current\|add\|del\|test`      | Manage the user-level npm registry (like nrm)                                            |
 | `sdkvm mrm ls\|use\|current\|add\|del\|test\|settings` | Manage Maven dependency mirrors (`settings.xml`, like nrm)                         |
-| `sdkvm java\|go\|flutter\|node\|maven …`          | Full command group for that SDK                                                          |
+| `sdkvm java\|go\|flutter\|node\|maven\|miniconda …` | Full command group for that SDK                                                          |
 | `sdkvm version`                                   | Print the CLI version (same as `sdkvm --version`)                                        |
 | `sdkvm upgrade`                                   | Upgrade the CLI. See [Upgrade](#upgrade)                                                 |
 
@@ -216,6 +224,7 @@ sdkvm go      install latest | 1.24 | 1.24.5 | golang-1.24
 sdkvm flutter install latest | 3.47 | 3.47.5 | 3.49.0-0.1.pre | flutter-3.47
 sdkvm node    install lts | latest | 22 | 22.20.0 | nodejs-22.20.0
 sdkvm maven   install latest | 3 | 3.9 | 3.9.9 | 4.0.0-rc-4 | maven-3.9
+sdkvm miniconda install latest | 26 | 26.7 | 26.7.1-1 | py313 | py313_26.7.1-1
 ```
 
 ### `sdkvm install <version>`
@@ -233,14 +242,14 @@ sdkvm switch to it: sdkvm use 21
 
 | Option          | Meaning                                                                                                    |
 | --------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--vendor <id>` | Java: `temurin` (default) / `zulu` / `corretto`. Go is `golang`, Flutter is `flutter`, Node.js is `nodejs`, Maven is `maven` |
+| `--vendor <id>` | Java: `temurin` (default) / `zulu` / `corretto`. Go is `golang`, Flutter is `flutter`, Node.js is `nodejs`, Maven is `maven`, Miniconda is `miniconda` |
 | `--force`       | Delete and reinstall. The default is to skip a version that is already present                             |
 
 A failed checksum or extract removes the partial directory and the cache. The download timer is 60 seconds without data, not a cap on total time.
 
 ### `sdkvm use <version>`
 
-Match an installed version, then update the `current-*` link and `JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` / `MAVEN_HOME` / `PATH`.
+Match an installed version, then update the `current-*` link and `JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` / `MAVEN_HOME` / `MINICONDA_HOME` / `PATH`.
 
 ```sh
 sdkvm use 21
@@ -249,6 +258,7 @@ sdkvm go use 1.24.5
 sdkvm flutter use 3.47.5
 sdkvm node use 22.20.0
 sdkvm maven use 3.9
+sdkvm miniconda use 26.7
 ```
 
 On macOS / Linux the first `use` appends an init block to the shell rc. Open a new terminal or `source ~/.zshrc`. Later switches only move the link. IDEs need a restart before they see the new variables. Maven needs a JDK: if `JAVA_HOME` is unset, `use` tells you to run `sdkvm java use` first. See [Switching](#switching).
@@ -293,6 +303,8 @@ node: nodejs-22.20.0
   NODE_HOME → ~/.sdkvm/nodes/nodejs-22.20.0
 maven: maven-3.9.9
   MAVEN_HOME → ~/.sdkvm/mavens/maven-3.9.9
+miniconda: miniconda-py313_26.7.1-1
+  MINICONDA_HOME → ~/.sdkvm/minicondas/miniconda-py313_26.7.1-1
 ```
 
 ### `sdkvm uninstall <version>`
@@ -301,7 +313,7 @@ Same syntax as `use`. Uninstalling the current version clears that `current-*` l
 
 ### `sdkvm mirror`
 
-Manages **install-archive mirrors** per SDK type (not the npm package registry). Java: `sdkvm mirror`. Others: `sdkvm go|flutter|node|maven mirror`. Scopes do not overlap.
+Manages the **download mirror** for each SDK (not the npm package registry, and not conda channels). Java: `sdkvm mirror`. Others: `sdkvm go|flutter|node|maven|miniconda mirror`. Scopes do not overlap. `sdkvm miniconda mirror` only chooses where sdkvm downloads Miniconda itself.
 
 ```sh
 sdkvm mirror ls
@@ -356,14 +368,14 @@ Built-in names: `official` (remove the sdkvm marker block and keep your other mi
 
 `install`, `use`, and `uninstall` share this table. Combinations that are not listed are rejected with a rewrite hint.
 
-| Form             | Java                       | Go                              | Flutter                                | Node.js                                | Maven                         | Example                                                       |
-| ---------------- | -------------------------- | ------------------------------- | -------------------------------------- | -------------------------------------- | ----------------------------- | ------------------------------------------------------------- |
-| `<major>`        | Latest patch of that major | —                               | —                                      | Latest of that major                   | Latest stable of that major   | `21`, `22`, `3`                                               |
-| `<major.minor>`  | —                          | Latest patch of that minor line | Latest stable patch of that minor line | —                                      | Latest stable of that minor   | `1.24`, `3.47`, `3.9`                                         |
-| `lts`            | Latest LTS major           | —                               | —                                      | Latest LTS line (currently 24 Krypton) | —                             | `lts`                                                         |
-| `latest`         | —                          | Newest stable                   | Newest stable, not beta                | Newest Current                         | Newest stable, not prerelease | `latest`                                                      |
-| `<full-version>` | Exact or prefix            | Exact                           | Exact, including a prerelease          | Exact                                  | Exact, including a prerelease | `21.0.5+11`, `1.24.5`, `3.49.0-0.1.pre`, `22.20.0`, `4.0.0-rc-4` |
-| `<vendor>-…`     | Pin a distribution         | Same                            | Same                                   | Same                                   | Same                          | `zulu-21`, `golang-1.24`, `nodejs-22.20.0`, `maven-3.9.9`     |
+| Form             | Java                       | Go                              | Flutter                                | Node.js                                | Maven                         | Miniconda                    | Example                                                       |
+| ---------------- | -------------------------- | ------------------------------- | -------------------------------------- | -------------------------------------- | ----------------------------- | --------------------------- | ------------------------------------------------------------- |
+| `<major>`        | Latest patch of that major | —                               | —                                      | Latest of that major                   | Latest stable of that major   | Newest of that major       | `21`, `22`, `3`, `26`                                         |
+| `<major.minor>`  | —                          | Latest patch of that minor line | Latest stable patch of that minor line | —                                      | Latest stable of that minor   | Newest of that minor line  | `1.24`, `3.47`, `3.9`, `26.7`                                 |
+| `lts`            | Latest LTS major           | —                               | —                                      | Latest LTS line (currently 24 Krypton) | —                             | —                           | `lts`                                                         |
+| `latest`         | —                          | Newest stable                   | Newest stable, not beta                | Newest Current                         | Newest stable, not prerelease | Newest installer for this OS | `latest`                                                      |
+| `<full-version>` | Exact or prefix            | Exact                           | Exact, including a prerelease          | Exact                                  | Exact, including a prerelease | Build or Python tag         | `21.0.5+11`, `1.24.5`, `22.20.0`, `py313_26.7.1-1`            |
+| `<vendor>-…`     | Pin a distribution         | Same                            | Same                                   | Same                                   | Same                          | Same                        | `zulu-21`, `maven-3.9.9`, `miniconda-py313_26.7.1-1`          |
 
 Rules:
 
@@ -373,6 +385,7 @@ Rules:
 - Maven lists stable `x.y.z` releases from 3.0 upward. `latest`, `3`, and `3.9` skip prereleases; install `4.0.0-rc-4` with the full string. Maven has no `lts` alias.
 - Java `lts` follows the Adoptium list: 8 / 11 / 17 / 21 / 25. Node.js `lts` is the newest `index.json` entry that carries an LTS codename.
 - Node.js rejects a two-part version such as `22.20`. Use `22` or `22.20.0`.
+- Miniconda versions look like `py313_26.7.1-1`. `26` is the newest of that major. `26.7` is the newest of that minor line. `26.7.1-1` is the highest Python for that build. `py313` is the newest installer for that Python. `py313_26.7.1-1` pins both. There is no `lts` alias. The `latest` filename alias is ignored.
 - Omitting the vendor uses the default distribution. Only Java's default is configurable. See [Config file](#config-file).
 
 ## How it works
@@ -388,11 +401,13 @@ The data root is `~/.sdkvm` (`%USERPROFILE%\.sdkvm` on Windows). `SDKVM_HOME` ov
 ├── flutters/        # Flutter: flutter-3.47.5
 ├── nodes/           # Node.js: nodejs-22.20.0
 ├── mavens/          # Maven: maven-3.9.9
+├── minicondas/       # Miniconda: miniconda-py313_26.7.1-1
 ├── current-java     # JAVA_HOME link (junction on Windows)
 ├── current-go
 ├── current-flutter
 ├── current-node
 ├── current-maven
+├── current-miniconda
 ├── runtime/         # Script-install Node, isolated from current-node
 ├── cli/             # Script-install CLI package
 ├── bin/             # Script-install entrypoint sdkvm (add to PATH)
@@ -401,11 +416,11 @@ The data root is `~/.sdkvm` (`%USERPROFILE%\.sdkvm` on Windows). `SDKVM_HOME` ov
 └── tmp/             # Extract staging, also removed
 ```
 
-Unpacked size, roughly: Java 300 MB, Go 250 MB, Node.js 100 MB (bundled npm included), Maven about 10 MB, Flutter several GB (the archive itself is about 1–2.2 GB).
+Unpacked size, roughly: Java 300 MB, Go 250 MB, Node.js 100 MB (bundled npm included), Maven about 10 MB, Miniconda installers about 150 MB, Flutter several GB (the archive itself is about 1–2.2 GB).
 
 ### Switching
 
-On macOS / Linux, each `current-*` entry is a symlink to the selected version. The first `use` appends a marked block: zsh writes `~/.zshrc`, bash writes `~/.bash_profile` or `~/.bashrc`. Each SDK has its own block.
+On macOS / Linux, each `current-*` entry is a symlink to the selected version. The first `use` appends a marked block: zsh writes `~/.zshrc`, bash writes `~/.bash_profile` or `~/.bashrc`. Each SDK has its own block. The Miniconda block also sources `conda.sh`, so `conda activate` works.
 
 ```sh
 # >>> sdkvm java init >>>
@@ -432,11 +447,19 @@ case ":$PATH:" in *":$NODE_HOME/bin:"*) ;; *) export PATH="$NODE_HOME/bin:$PATH"
 export MAVEN_HOME="$HOME/.sdkvm/current-maven"
 case ":$PATH:" in *":$MAVEN_HOME/bin:"*) ;; *) export PATH="$MAVEN_HOME/bin:$PATH";; esac
 # <<< sdkvm maven init <<<
+
+# >>> sdkvm miniconda init >>>
+export MINICONDA_HOME="$HOME/.sdkvm/current-miniconda"
+case ":$PATH:" in *":$MINICONDA_HOME/bin:"*) ;; *) export PATH="$MINICONDA_HOME/bin:$PATH";; esac
+export CONDA_EXE="$MINICONDA_HOME/bin/conda"
+export CONDA_PYTHON_EXE="$MINICONDA_HOME/bin/python"
+[ -f "$MINICONDA_HOME/etc/profile.d/conda.sh" ] && . "$MINICONDA_HOME/etc/profile.d/conda.sh"
+# <<< sdkvm miniconda init <<<
 ```
 
 The variables point at the link. Later `use` calls only retarget that link, and a new terminal reads the new value.
 
-On Windows the five `current-*` entries are junctions. `use` writes user environment variables as `REG_EXPAND_SZ` and keeps `%VAR%` references, which avoids the 1024-character `setx` truncation. PATH gains `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, and `%MAVEN_HOME%\bin`. The Windows Node.js archive has no `bin/` directory, so its PATH entry is `%NODE_HOME%` itself. Open a new terminal or restart the IDE.
+On Windows the six `current-*` entries are junctions. `use` writes user environment variables as `REG_EXPAND_SZ` and keeps `%VAR%` references, which avoids the 1024-character `setx` truncation. PATH gains `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, and `%MAVEN_HOME%\bin`. The Windows Node.js archive has no `bin/` directory, so its PATH entry is `%NODE_HOME%` itself. Miniconda adds `%MINICONDA_HOME%`, `%MINICONDA_HOME%\Scripts`, and `%MINICONDA_HOME%\Library\bin`. Open a new terminal or restart the IDE. `conda activate` in PowerShell is not covered.
 
 ## Configuration
 
@@ -494,7 +517,7 @@ Three independent features:
 
 |         | `sdkvm mirror`                                              | `sdkvm nrm`              | `sdkvm mrm`                                      |
 | ------- | ----------------------------------------------------------- | ------------------------ | ------------------------------------------------ |
-| Changes | JDK / Go / Flutter / Node / Maven **install archive** URLs  | **npm package** registry | Maven **dependency / plugin** repositories       |
+| Changes | Where sdkvm downloads JDK / Go / Flutter / Node / Maven / Miniconda | **npm package** registry | Maven **dependency / plugin** repositories       |
 | Affects | `sdkvm … install`                                           | `npm install`            | `mvn` dependency resolution (`settings.xml`)     |
 | Scope   | Per SDK type                                                | User-level global        | One `settings.xml`                               |
 
@@ -508,15 +531,19 @@ sdkvm go mirror use nju
 sdkvm flutter mirror use nju
 sdkvm node mirror use nju
 sdkvm maven mirror use aliyun
+sdkvm miniconda mirror use tuna
 ```
 
-| Site       | Java (temurin)  | Go              | Flutter         | Node.js                             | Maven           |
-| ---------- | --------------- | --------------- | --------------- | ----------------------------------- | --------------- |
-| `nju`      | ✓               | ✓               | ✓               | ✓                                   | —               |
-| `tuna`     | ✓               | —               | ✓               | — (incomplete archives; not listed) | —               |
-| `aliyun`   | —               | ✓               | —               | ✓                                   | ✓               |
-| `huawei`   | —               | —               | —               | ✓                                   | ✓               |
-| `official` | Clear this type | Clear this type | Clear this type | Clear this type                     | Clear this type |
+`sdkvm miniconda mirror` only switches where sdkvm downloads Miniconda itself. It does not write `.condarc` and does not change `conda install` channels. Aliyun does not host that installer directory, so it is not listed.
+
+| Site       | Java (temurin)  | Go              | Flutter         | Node.js                             | Maven           | Miniconda        |
+| ---------- | --------------- | --------------- | --------------- | ----------------------------------- | --------------- | --------------- |
+| `nju`      | ✓               | ✓               | ✓               | ✓                                   | —               | ✓               |
+| `tuna`     | ✓               | —               | ✓               | — (incomplete archives; not listed) | —               | ✓               |
+| `aliyun`   | —               | ✓               | —               | ✓                                   | ✓               | —               |
+| `huawei`   | —               | —               | —               | ✓                                   | ✓               | —               |
+| `ustc`     | —               | —               | —               | —                                   | —               | ✓               |
+| `official` | Clear this type | Clear this type | Clear this type | Clear this type                     | Clear this type | Clear this type |
 
 Raw URL or one-shot override:
 
@@ -627,7 +654,7 @@ rm -rf ~/.sdkvm/bin ~/.sdkvm/cli ~/.sdkvm/runtime
 
 On Windows, delete `%USERPROFILE%\.sdkvm\bin\sdkvm.cmd`, plus `%USERPROFILE%\.sdkvm\cli` and `%USERPROFILE%\.sdkvm\runtime`, and remove `%USERPROFILE%\.sdkvm\bin` from the user PATH.
 
-After you no longer need the installed JDKs, Go, Flutter, Node.js, and Maven, remove the data directory:
+After you no longer need the installed JDKs, Go, Flutter, Node.js, Maven, and Miniconda, remove the data directory:
 
 ```sh
 rm -rf ~/.sdkvm
@@ -636,9 +663,9 @@ rm -rf ~/.sdkvm
 Also delete these shell blocks:
 
 - `# >>> sdkvm path >>>` … `# <<< sdkvm path <<<`
-- each SDK’s `>>> sdkvm java|go|flutter|node|maven init >>>` … `<<< … <<<`
+- each SDK’s `>>> sdkvm java|go|flutter|node|maven|miniconda init >>>` … `<<< … <<<`
 
-On Windows, remove `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, and `MAVEN_HOME` from the user environment, and remove `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, `%NODE_HOME%`, and `%MAVEN_HOME%\bin` from the user PATH.
+On Windows, remove `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, `MAVEN_HOME`, and `MINICONDA_HOME` from the user environment, and remove `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, `%NODE_HOME%`, `%MAVEN_HOME%\bin`, `%MINICONDA_HOME%`, `%MINICONDA_HOME%\Scripts`, and `%MINICONDA_HOME%\Library\bin` from the user PATH.
 
 ## Development
 
@@ -656,8 +683,8 @@ npm run build
 src/
 ├── cli/       # install / use / ls / uninstall / mirror / nrm / upgrade
 ├── core/      # version parsing, registry, config, file lock
-├── sdk/       # java / go / flutter / node / maven: directories, env vars, version syntax
-├── vendor/    # temurin / zulu / corretto / golang / flutter / nodejs / maven, plus mirror rewrite
+├── sdk/       # java / go / flutter / node / maven / miniconda: directories, env vars, version syntax
+├── vendor/    # temurin / zulu / corretto / golang / flutter / nodejs / maven / miniconda, plus mirror rewrite
 ├── fs/        # extract, layout normalize, links
 ├── shell/     # rc writes, Windows registry
 ├── net/       # fetch, streaming download, checksums

@@ -1,8 +1,8 @@
 import type { Platform } from '../core/platform.js';
 import type { ReleaseLine, SdkVersion, UserSpec, Vendor, VendorPlatform, VersionSpec } from '../vendor/types.js';
 
-/** SDK 类型 id：java / go / flutter / node / maven（未来可扩展） */
-export type SdkTypeId = 'java' | 'go' | 'flutter' | 'node' | 'maven';
+/** SDK 类型 id：java / go / flutter / node / maven / miniconda（未来可扩展） */
+export type SdkTypeId = 'java' | 'go' | 'flutter' | 'node' | 'maven' | 'miniconda';
 
 /**
  * SDK 类型描述：目录布局、版本语法、环境变量、探测方式全部按类型参数化，
@@ -16,7 +16,7 @@ export interface SdkTypeSpec {
   readonly installDirName: string;
   /** current 链接名（根目录之下） */
   readonly currentLinkName: string;
-  /** 切换时导出的环境变量名：JAVA_HOME / GO_HOME / FLUTTER_HOME / NODE_HOME / MAVEN_HOME */
+  /** 切换时导出的环境变量名：JAVA_HOME / GO_HOME / FLUTTER_HOME / NODE_HOME / MAVEN_HOME / MINICONDA_HOME */
   readonly envVar: string;
   /** 是否支持 lts 语义（java / node 有，go / flutter / maven 没有） */
   readonly supportsLts: boolean;
@@ -30,6 +30,12 @@ export interface SdkTypeSpec {
   /** 有序厂商列表，[0] 为默认厂商 */
   readonly vendors: readonly Vendor[];
   parseUserSpec(input: string): UserSpec;
+  /**
+   * full 规格是否命中已安装版本。
+   * 缺省为格式化串相等，或以 + / . 续段（java 的 21.0.5 命中 21.0.5+11）。
+   * Miniconda 的 py313、26.7.1-1 不是格式化串前缀，要按 Python 和构建号比。
+   */
+  matchesFull?(installed: SdkVersion, version: string): boolean;
   /** 安装目录名 → 版本；不匹配返回 null */
   parseDirName(dir: string): SdkVersion | null;
   formatVersion(v: SdkVersion): string;
@@ -38,6 +44,16 @@ export interface SdkTypeSpec {
   binRelPath(platform: Platform | VendorPlatform): string;
   /** 环境变量目录追加到 PATH 的段（rc 守卫与 Windows PATH entry 共用；node 在 windows 无 bin/ → ''） */
   envBinSuffix(platform: Platform | VendorPlatform): string;
+  /**
+   * Windows 用户 PATH 要追加的后缀。缺省为 [envBinSuffix]。
+   * Miniconda 需要根目录（python.exe）、Scripts（conda.exe）和 Library\bin。
+   */
+  envPathSuffixes?(platform: Platform | VendorPlatform): readonly string[];
+  /**
+   * 写在 PATH 行之后、标记块之内的额外 shell 片段。
+   * Miniconda 用来 source conda.sh，使 `conda activate` 可用。返回值按原样写入 rc。
+   */
+  rcExtra?(envVar: string): string;
   /** 解压根目录 → 环境语义目录（java macOS bundle → Contents/Home；go 原样） */
   locateHome(root: string): string;
   /** use 后打印版本的方式（java -version 在 stderr；go version 在 stdout） */

@@ -7,6 +7,7 @@ import { golangVendor } from './golang.js';
 import { flutterVendor } from './flutter.js';
 import { nodejsVendor } from './nodejs.js';
 import { mavenVendor } from './maven.js';
+import { minicondaVendor } from './miniconda.js';
 import type { SdkvmConfig } from '../core/config.js';
 import { SdkvmError } from '../util/errors.js';
 
@@ -16,6 +17,7 @@ export const GO_VENDORS: readonly Vendor[] = [golangVendor];
 export const FLUTTER_VENDORS: readonly Vendor[] = [flutterVendor];
 export const NODE_VENDORS: readonly Vendor[] = [nodejsVendor];
 export const MAVEN_VENDORS: readonly Vendor[] = [mavenVendor];
+export const MINICONDA_VENDORS: readonly Vendor[] = [minicondaVendor];
 
 export function vendorsFor(type: SdkTypeId): readonly Vendor[] {
   if (type === 'java') return JAVA_VENDORS;
@@ -23,6 +25,7 @@ export function vendorsFor(type: SdkTypeId): readonly Vendor[] {
   if (type === 'flutter') return FLUTTER_VENDORS;
   if (type === 'node') return NODE_VENDORS;
   if (type === 'maven') return MAVEN_VENDORS;
+  if (type === 'miniconda') return MINICONDA_VENDORS;
   throw new SdkvmError(`Unknown SDK type: ${type}`);
 }
 
