@@ -54,7 +54,38 @@ export function parseVersion(vendor: VendorId, input: string): SdkVersion {
   };
 }
 
+/** 去掉厂商 / jdk- 前缀后的版本正文。对不上版本语法时返回 null。 */
+function javaVersionToken(raw: string): string | null {
+  const vendorPrefix = new RegExp(`^(${JAVA_VENDOR_IDS.join('|')})-`, 'i');
+  let s = raw.trim().replace(/^jdk-/i, '').replace(vendorPrefix, '').replace(/^v/i, '');
+  s = s.replace(/^zulu\d[\d.]*-ca-jdk[\d.]*-?/i, '');
+  return /^\d+(\.\d+)*(\+[0-9.]+)?$/.test(s) ? s : null;
+}
+
+/**
+ * 数字段带前导零时，Number() 会把它吃掉（Corretto 8 的 8.504.01.1 → 8.504.1.1）。
+ * 正文和解析结果是同一版本时，沿用原始写法，安装目录才能对上官方 URL。
+ */
+function preserveLeadingZeros(v: SdkVersion): string | null {
+  const token = javaVersionToken(v.raw);
+  const base = token?.split('+')[0] ?? '';
+  if (!token || !/(?:^|\.)0\d+/.test(base)) return null;
+  const again = parseVersion(v.vendor, token);
+  if (
+    again.major !== v.major ||
+    again.minor !== v.minor ||
+    (again.patch ?? 0) !== (v.patch ?? 0) ||
+    again.extra !== v.extra ||
+    again.build !== v.build
+  ) {
+    return null;
+  }
+  return token;
+}
+
 export function formatVersion(v: SdkVersion): string {
+  const preserved = preserveLeadingZeros(v);
+  if (preserved) return preserved;
   if (v.patch !== null && v.minor === 0 && v.patch === 0 && !v.extra && !v.build) return String(v.major);
   let s = `${v.major}.${v.minor}.${v.patch ?? 0}`;
   if (v.extra) s += `.${v.extra}`;

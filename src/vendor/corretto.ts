@@ -3,6 +3,18 @@ import { httpFetch } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
 
+/**
+ * Corretto 8 的构建号固定两位：8.504.01.1。
+ * Number() 会把 01 收成 1，按收成后的字符串去拼 URL 会 403。
+ * 其它 major 没有这条约定，原样返回。
+ */
+export function canonicalCorrettoVersion(input: string): string {
+  const v = parseVersion('corretto', input);
+  if (v.major !== 8 || v.patch == null || v.extra == null || v.build != null) return input.trim();
+  if (!/^\d+$/.test(v.extra)) return input.trim();
+  return `8.${v.minor}.${String(v.patch).padStart(2, '0')}.${v.extra}`;
+}
+
 const BASE = 'https://corretto.aws/downloads';
 const MAJORS = [8, 11, 17, 21, 25];
 
@@ -71,8 +83,9 @@ export const correttoVendor: Vendor = {
       // java 语法不会产出 line/latest（go 专用），防御性拒绝
       throw new SdkvmError(`Unsupported version spec for Corretto: ${spec.kind}`);
     }
-    const v = parseVersion('corretto', version);
-    const url = resourceUrl(version, platform);
+    const canonical = canonicalCorrettoVersion(version);
+    const v = parseVersion('corretto', canonical);
+    const url = resourceUrl(canonical, platform);
     return {
       vendorId: 'corretto',
       version: v,

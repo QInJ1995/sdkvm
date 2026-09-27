@@ -21,6 +21,7 @@ interface ZuluPackage {
   download_url: string;
   java_version: number[];
   distro_version: number[];
+  package_uuid?: string;
   sha256_hash?: string;
 }
 
@@ -96,6 +97,26 @@ async function queryPackages(
   return out;
 }
 
+/**
+ * 列目录接口不再返回 sha256_hash，哈希在包详情上。
+ * 详情失败时保持缺失，安装仍走尽力校验，不因此中断。
+ */
+async function hydrateChecksum(pkg: ZuluPackage): Promise<ZuluPackage> {
+  if (pkg.sha256_hash || !pkg.package_uuid) return pkg;
+  try {
+    const res = await httpFetch(`${API}/zulu/packages/${pkg.package_uuid}`, {
+      headers: { accept: 'application/json' },
+    });
+    const detail = (await res.json()) as { sha256_hash?: unknown };
+    if (typeof detail.sha256_hash === 'string' && /^[0-9a-f]{64}$/i.test(detail.sha256_hash)) {
+      return { ...pkg, sha256_hash: detail.sha256_hash.toLowerCase() };
+    }
+  } catch {
+    // 详情不可达时跳过校验
+  }
+  return pkg;
+}
+
 export const zuluVendor: Vendor = {
   id: 'zulu',
   label: 'Azul Zulu',
@@ -143,16 +164,17 @@ export const zuluVendor: Vendor = {
         hint: `Run \`${cmdPath('java')} ls -r\` to see available versions.`,
       });
     }
-    const versionStr = pick.java_version.join('.');
+    const hashed = await hydrateChecksum(pick);
+    const versionStr = hashed.java_version.join('.');
     const v = parseVersion('zulu', versionStr);
     return {
       vendorId: 'zulu',
       version: v,
       dirName: `zulu-${formatVersion(v)}`,
       displayName: `Zulu ${formatVersion(v)}`,
-      downloadUrl: pick.download_url,
-      checksum: pick.sha256_hash
-        ? { kind: 'sha256', expected: pick.sha256_hash }
+      downloadUrl: hashed.download_url,
+      checksum: hashed.sha256_hash
+        ? { kind: 'sha256', expected: hashed.sha256_hash }
         : null,
       archive: platform.os === 'windows' ? 'zip' : 'tar.gz',
     };

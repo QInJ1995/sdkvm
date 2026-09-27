@@ -70,6 +70,11 @@ describe('parseVersion', () => {
     expect(formatVersion(parseVersion('temurin', '21'))).toBe('21');
   });
 
+  it('keeps leading zeros that Number() would drop', () => {
+    expect(formatVersion(parseVersion('corretto', '8.504.01.1'))).toBe('8.504.01.1');
+    expect(formatVersion(parseVersion('corretto', '8.504.1.1'))).toBe('8.504.1.1');
+  });
+
   it('rejects garbage', () => {
     expect(() => parseVersion('temurin', 'abc')).toThrow(SdkvmError);
     expect(() => parseVersion('temurin', '21.x.5')).toThrow(SdkvmError);

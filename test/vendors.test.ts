@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { temurinVendor } from '../src/vendor/temurin.js';
 import { zuluVendor as zulu, zuluVersionMatches } from '../src/vendor/zulu.js';
-import { correttoVendor } from '../src/vendor/corretto.js';
+import { canonicalCorrettoVersion, correttoVendor } from '../src/vendor/corretto.js';
 
 const MAC = { os: 'mac' as const, arch: 'aarch64' as const };
 const LIN = { os: 'linux' as const, arch: 'x64' as const };
@@ -71,6 +71,34 @@ describe('temurin', () => {
     const a = await temurinVendor.resolve({ kind: 'full', version: '21.0.5+11' }, WIN);
     expect(a.archive).toBe('zip');
     expect(a.downloadUrl).toContain('OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip');
+  });
+
+  it('parses a legacy jdk8u redirect into 8.0.<update>+<build>', async () => {
+    const location =
+      'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u504-b01/OpenJDK8U-jdk_x64_linux_hotspot_8u504b01.tar.gz';
+    vi.stubGlobal('fetch', vi.fn(async () => res30x(location)));
+    const a = await temurinVendor.resolve({ kind: 'major', major: 8 }, LIN);
+    expect(a.downloadUrl).toBe(location);
+    expect(a.dirName).toBe('temurin-8.0.504+1');
+  });
+
+  it('builds the legacy JDK 8 asset name, padding the build to two digits', async () => {
+    const lin = await temurinVendor.resolve({ kind: 'full', version: '8.0.504+1' }, LIN);
+    expect(lin.downloadUrl).toBe(
+      'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u504-b01/OpenJDK8U-jdk_x64_linux_hotspot_8u504b01.tar.gz',
+    );
+    const win = await temurinVendor.resolve({ kind: 'full', version: '8.0.472+8' }, WIN);
+    expect(win.archive).toBe('zip');
+    expect(win.downloadUrl).toBe(
+      'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u472-b08/OpenJDK8U-jdk_x64_windows_hotspot_8u472b08.zip',
+    );
+  });
+
+  it('says when Temurin does not publish that major for this platform', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('missing', { status: 404 })));
+    await expect(temurinVendor.resolve({ kind: 'major', major: 8 }, MAC)).rejects.toThrow(
+      /No Temurin JDK 8 build for mac\/aarch64/,
+    );
   });
 
   it('resolve lts fails clearly when the index has no LTS line', async () => {
@@ -202,6 +230,48 @@ describe('zulu', () => {
     vi.stubGlobal('fetch', vi.fn(async () => resJson([packages[0]])));
     await expect(zulu.resolve({ kind: 'major', major: 21 }, MAC)).rejects.toThrow(/No Zulu JDK build matches/);
   });
+
+  it('loads sha256 from the package detail when the list omits it', async () => {
+    const listed = {
+      name: 'zulu21.52.203-ca-jdk21.0.12.1-macosx_aarch64.tar.gz',
+      download_url: 'https://cdn.azul.com/zulu/bin/zulu21.tar.gz',
+      java_version: [21, 0, 12, 1],
+      distro_version: [21, 52, 203, 0],
+      package_uuid: 'b4998dfa-d693-42ae-b745-e2140eb4ecb9',
+    };
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).includes('/zulu/packages/b4998dfa')) {
+        return resJson({ sha256_hash: 'AB'.repeat(32) });
+      }
+      return resJson([listed]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const a = await zulu.resolve({ kind: 'major', major: 21 }, MAC);
+    expect(a.checksum?.expected).toBe('ab'.repeat(32));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('still resolves when the checksum detail is unreachable', async () => {
+    const listed = {
+      name: 'zulu21.52.203-ca-jdk21.0.12.1-macosx_aarch64.tar.gz',
+      download_url: 'https://cdn.azul.com/zulu/bin/zulu21.tar.gz',
+      java_version: [21, 0, 12, 1],
+      distro_version: [21, 52, 203, 0],
+      package_uuid: 'missing-hash',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        if (String(url).includes('/zulu/packages/missing-hash')) {
+          return new Response('no', { status: 404 });
+        }
+        return resJson([listed]);
+      }),
+    );
+    const a = await zulu.resolve({ kind: 'major', major: 21 }, MAC);
+    expect(a.downloadUrl).toBe(listed.download_url);
+    expect(a.checksum).toBeNull();
+  });
 });
 
 describe('corretto', () => {
@@ -222,6 +292,29 @@ describe('corretto', () => {
     expect(a.checksum?.url).toBe(
       'https://corretto.aws/downloads/resources/21.0.12.9.1/amazon-corretto-21.0.12.9.1-macosx-aarch64.tar.gz.sha256',
     );
+  });
+
+  it('keeps Corretto 8 build numbers zero-padded in the directory and the URL', async () => {
+    expect(canonicalCorrettoVersion('8.504.1.1')).toBe('8.504.01.1');
+    expect(canonicalCorrettoVersion('8.504.01.1')).toBe('8.504.01.1');
+    expect(canonicalCorrettoVersion('8.504.12.1')).toBe('8.504.12.1');
+    expect(canonicalCorrettoVersion('21.0.12.9.1')).toBe('21.0.12.9.1');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        res30x(
+          'https://corretto.aws/downloads/resources/8.504.01.1/amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz',
+        ),
+      ),
+    );
+    const latest = await correttoVendor.resolve({ kind: 'major', major: 8 }, MAC);
+    expect(latest.dirName).toBe('corretto-8.504.01.1');
+    expect(latest.downloadUrl).toContain('/8.504.01.1/amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz');
+
+    const collapsed = await correttoVendor.resolve({ kind: 'full', version: '8.504.1.1' }, MAC);
+    expect(collapsed.dirName).toBe('corretto-8.504.01.1');
+    expect(collapsed.downloadUrl).toContain('amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz');
   });
 
   it('resolve full builds resource URL with per-OS naming', async () => {

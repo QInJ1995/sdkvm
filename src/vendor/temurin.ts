@@ -1,8 +1,8 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor } from './types.js';
 import type { VendorPlatform } from './types.js';
-import { httpJson, httpFetch } from '../net/http.js';
+import { HttpError, httpJson, httpFetch } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
-import { formatVersion, parseVersion } from '../core/version.js';
+import { formatVersion, parseVersion, type SdkVersion } from '../core/version.js';
 
 const API = 'https://api.adoptium.net';
 
@@ -18,7 +18,17 @@ async function resolveLatestRedirect(
   arch: string,
 ): Promise<string> {
   const url = `${API}/v3/binary/latest/${major}/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`;
-  const res = await httpFetch(url, { redirect: 'manual' });
+  let res: Response;
+  try {
+    res = await httpFetch(url, { redirect: 'manual' });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) {
+      throw new SdkvmError(`No Temurin JDK ${major} build for ${os}/${arch}`, {
+        hint: 'This platform is not published for that major. Try another vendor, for example: sdkvm java install 8 --vendor zulu',
+      });
+    }
+    throw err;
+  }
   if (res.status !== 302 && res.status !== 307 && res.status !== 308) {
     throw new SdkvmError(`Adoptium API returned ${res.status} for JDK ${major}`);
   }
@@ -27,17 +37,41 @@ async function resolveLatestRedirect(
   return location;
 }
 
-/** GitHub release URL → 版本串。jdk-21.0.12.1%2B1 → 21.0.12.1+1 */
+/**
+ * GitHub release URL → 版本串。
+ * 现代标签 jdk-21.0.12.1%2B1 → 21.0.12.1+1。
+ * JDK 8 仍是 jdk8u504-b01，没有 jdk- 前缀，也没有 %2B。
+ */
 function versionFromGithubUrl(url: string): string {
-  const m = /\/download\/jdk-([^/%]+(?:%2B[^/%]+)?)\//i.exec(url);
-  if (!m || !m[1]) throw new SdkvmError(`Cannot parse version from Adoptium URL: ${url}`);
-  return decodeURIComponent(m[1]);
+  const modern = /\/download\/jdk-([^/%]+(?:%2B[^/%]+)?)\//i.exec(url);
+  if (modern?.[1]) return decodeURIComponent(modern[1]);
+  const legacy = /\/download\/jdk8u(\d+)-b(\d+)\//i.exec(url);
+  if (legacy?.[1] && legacy?.[2]) {
+    return `8.0.${Number(legacy[1])}+${Number(legacy[2])}`;
+  }
+  throw new SdkvmError(`Cannot parse version from Adoptium URL: ${url}`);
+}
+
+/** JDK 8 资源名是 8u504b01，标签是 jdk8u504-b01。build 不足两位时补零。 */
+function jdk8LegacyNames(v: SdkVersion): { tag: string; token: string } | null {
+  if (v.major !== 8 || v.minor !== 0 || v.patch == null || v.patch <= 0 || v.extra || v.build == null) {
+    return null;
+  }
+  const build = Number(v.build);
+  if (!Number.isInteger(build) || build < 0) return null;
+  const padded = String(build).padStart(2, '0');
+  return { tag: `jdk8u${v.patch}-b${padded}`, token: `8u${v.patch}b${padded}` };
 }
 
 function githubAssetUrl(version: string, os: string, arch: string): string {
   const v = parseVersion('temurin', version);
-  const major = v.major;
   const ext = os === 'windows' ? 'zip' : 'tar.gz';
+  const legacy = jdk8LegacyNames(v);
+  if (legacy) {
+    const file = `OpenJDK8U-jdk_${arch}_${os}_hotspot_${legacy.token}.${ext}`;
+    return `https://github.com/adoptium/temurin8-binaries/releases/download/${legacy.tag}/${file}`;
+  }
+  const major = v.major;
   const underscored = formatVersion(v).replace('+', '_');
   const file = `OpenJDK${major}U-jdk_${arch}_${os}_hotspot_${underscored}.${ext}`;
   return `https://github.com/adoptium/temurin${major}-binaries/releases/download/jdk-${encodeURIComponent(version)}/${file}`;
