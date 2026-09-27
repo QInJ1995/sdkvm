@@ -7,7 +7,7 @@ export interface VendorPlatform {
   arch: 'aarch64' | 'x64';
 }
 
-/** 版本线：java 一个 major 一条线（key "21"），go/flutter 一条 minor 线（key "1.24" / "3.47"） */
+/** 版本线：java 一个 major 一条线（key "21"），go / flutter / maven / python 一条 minor 线（key "1.24" / "3.47" / "3.9" / "3.12"） */
 export interface ReleaseLine {
   key: string;
   lts: boolean;

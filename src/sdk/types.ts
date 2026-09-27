@@ -1,8 +1,8 @@
 import type { Platform } from '../core/platform.js';
 import type { ReleaseLine, SdkVersion, UserSpec, Vendor, VendorPlatform, VersionSpec } from '../vendor/types.js';
 
-/** SDK 类型 id：java / go / flutter / node / maven / miniconda（未来可扩展） */
-export type SdkTypeId = 'java' | 'go' | 'flutter' | 'node' | 'maven' | 'miniconda';
+/** SDK 类型 id：java / go / flutter / node / maven / miniconda / python（未来可扩展） */
+export type SdkTypeId = 'java' | 'go' | 'flutter' | 'node' | 'maven' | 'miniconda' | 'python';
 
 /**
  * SDK 类型描述：目录布局、版本语法、环境变量、探测方式全部按类型参数化，
@@ -16,9 +16,9 @@ export interface SdkTypeSpec {
   readonly installDirName: string;
   /** current 链接名（根目录之下） */
   readonly currentLinkName: string;
-  /** 切换时导出的环境变量名：JAVA_HOME / GO_HOME / FLUTTER_HOME / NODE_HOME / MAVEN_HOME / MINICONDA_HOME */
+  /** 切换时导出的环境变量名：JAVA_HOME / GO_HOME / FLUTTER_HOME / NODE_HOME / MAVEN_HOME / MINICONDA_HOME / PYTHON_HOME */
   readonly envVar: string;
-  /** 是否支持 lts 语义（java / node 有，go / flutter / maven 没有） */
+  /** 是否支持 lts 语义（java / node 有，go / flutter / maven / miniconda / python 没有） */
   readonly supportsLts: boolean;
   /** use 之后若进程里没有 JAVA_HOME，提示先切换 JDK（Maven 需要） */
   readonly requiresJdk?: boolean;
@@ -36,6 +36,11 @@ export interface SdkTypeSpec {
    * Miniconda 的 py313、26.7.1-1 不是格式化串前缀，要按 Python 和构建号比。
    */
   matchesFull?(installed: SdkVersion, version: string): boolean;
+  /**
+   * major / line / latest 是否纳入该已安装版本。缺省全部纳入。
+   * Python 预发布不纳入，只能用完整版本号切换。
+   */
+  matchesLoose?(installed: SdkVersion): boolean;
   /** 安装目录名 → 版本；不匹配返回 null */
   parseDirName(dir: string): SdkVersion | null;
   formatVersion(v: SdkVersion): string;

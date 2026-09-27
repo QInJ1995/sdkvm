@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyMirror, applyMirrorDetail } from '../src/vendor/mirror.js';
 import { parseVersion } from '../src/core/version.js';
-import { parseGoVersion, parseFlutterVersion, parseNodeVersion, parseMinicondaVersion } from '../src/core/version.js';
+import { parseGoVersion, parseFlutterVersion, parseNodeVersion, parseMinicondaVersion, parsePythonVersion } from '../src/core/version.js';
 import type { ResolvedArtifact } from '../src/vendor/types.js';
 
 function artifact(url: string, vendorId: string = 'temurin'): ResolvedArtifact {
@@ -183,5 +183,32 @@ describe('applyMirror miniconda', () => {
       'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py313_26.7.1-1-MacOSX-arm64.sh',
     );
     expect(detail.artifact.checksum).toEqual({ kind: 'sha256', expected: 'ab'.repeat(32) });
+  });
+});
+
+describe('applyMirror cpython', () => {
+  const mac = { os: 'mac' as const, arch: 'aarch64' as const };
+  const official =
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.12.7+20260924-aarch64-apple-darwin-install_only_stripped.tar.gz';
+
+  function pythonArtifact(): ResolvedArtifact {
+    return {
+      vendorId: 'cpython',
+      version: parsePythonVersion('cpython', '3.12.7'),
+      dirName: 'cpython-3.12.7',
+      displayName: 'Python 3.12.7',
+      downloadUrl: official,
+      checksum: { kind: 'sha256', expected: 'cd'.repeat(32) },
+      archive: 'tar.gz',
+    };
+  }
+
+  it('rewrites only the GitHub download prefix and keeps the tag, filename, and hash', () => {
+    const detail = applyMirrorDetail(pythonArtifact(), mac, 'https://example.invalid/python-standalone/');
+    expect(detail.applied).toBe(true);
+    expect(detail.artifact.downloadUrl).toBe(
+      'https://example.invalid/python-standalone/20260924/cpython-3.12.7+20260924-aarch64-apple-darwin-install_only_stripped.tar.gz',
+    );
+    expect(detail.artifact.checksum).toEqual({ kind: 'sha256', expected: 'cd'.repeat(32) });
   });
 });

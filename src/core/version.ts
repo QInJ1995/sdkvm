@@ -527,3 +527,113 @@ export function parseMinicondaUserSpec(input: string): UserSpec {
     hint: MINICONDA_VERSION_HINT,
   });
 }
+
+// —— python（CPython / python-build-standalone）解析 ——
+
+export const PYTHON_VENDOR_IDS = ['cpython'] as const;
+
+const PYTHON_VERSION_HINT = 'Expected forms: 3, 3.12, 3.12.7, 3.14.0rc2, latest';
+
+/** 预发布标记：a1 / b3 / rc2。稳定版没有这段。PEP 440：a < b < rc < 正式版。 */
+const PYTHON_PRE = '(?:a|b|rc)\\d+';
+const PYTHON_VERSION_RE = new RegExp(`^(\\d+)\\.(\\d+)\\.(\\d+)(${PYTHON_PRE})?$`);
+const PYTHON_PRE_RE = /^(a|b|rc)(\d+)$/;
+
+/**
+ * 解析 CPython 版本。extra 存预发布标记（"rc2"），build 留空。
+ * 构建日期 +20260924 不属于版本。接受 cpython- / v 前缀。
+ */
+export function parsePythonVersion(vendor: VendorId, input: string): SdkVersion {
+  const raw = input.trim();
+  const s = raw.replace(/^cpython-/i, '').replace(/^v/i, '');
+  const m = PYTHON_VERSION_RE.exec(s);
+  if (!m || !m[1] || !m[2] || !m[3]) {
+    throw new SdkvmError(`Invalid Python version: "${input}"`, {
+      hint: PYTHON_VERSION_HINT,
+    });
+  }
+  return {
+    vendor,
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3]),
+    extra: m[4] ?? null,
+    build: null,
+    raw,
+  };
+}
+
+/** 3.12.7；预发布直接接在补丁后：3.14.0rc2 */
+export function formatPythonVersion(v: SdkVersion): string {
+  const base = `${v.major}.${v.minor}.${v.patch ?? 0}`;
+  return v.extra ? `${base}${v.extra}` : base;
+}
+
+/** 稳定版没有 extra。预发布不参与 3 / 3.12 / latest。 */
+export function isPythonStable(v: SdkVersion): boolean {
+  return v.extra == null;
+}
+
+/**
+ * 同一组数字里，正式版比预发布新（3.14.0 > 3.14.0rc2）。
+ * 预发布之间按 a < b < rc，序号按数值（rc2 < rc10）。
+ * 共用的 compareVersions 把空 extra 当成更小，会把 rc 排到正式版后面。
+ */
+export function comparePythonVersions(a: SdkVersion, b: SdkVersion): number {
+  const base = compareVersions({ ...a, extra: null, build: null }, { ...b, extra: null, build: null });
+  if (base !== 0) return base;
+  if (a.extra == null && b.extra == null) return 0;
+  if (a.extra == null) return 1;
+  if (b.extra == null) return -1;
+  const ar = PYTHON_PRE_RE.exec(a.extra);
+  const br = PYTHON_PRE_RE.exec(b.extra);
+  const ak = ar?.[1] === 'rc' ? 2 : ar?.[1] === 'b' ? 1 : 0;
+  const bk = br?.[1] === 'rc' ? 2 : br?.[1] === 'b' ? 1 : 0;
+  if (ak !== bk) return ak > bk ? 1 : -1;
+  const an = Number(ar?.[2] ?? 0);
+  const bn = Number(br?.[2] ?? 0);
+  if (an !== bn) return an > bn ? 1 : -1;
+  return 0;
+}
+
+/** python 安装目录名 → 版本；不匹配返回 null */
+export function parsePythonDirName(dir: string): SdkVersion | null {
+  const m = new RegExp(`^(${PYTHON_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
+  if (!m || !m[1] || !m[2]) return null;
+  try {
+    return parsePythonVersion(m[1], m[2]);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * python 版本语法：3（该 major 最新稳定）/ 3.12（minor 线最新稳定）/
+ * 3.12.7（精确）/ 3.14.0rc2（精确预发布）/ latest。可带 cpython- 前缀。无 lts。
+ */
+export function parsePythonUserSpec(input: string): UserSpec {
+  let s = input.trim().toLowerCase();
+  let vendor: VendorId | undefined;
+  const prefixed = /^(cpython)-(.+)$/.exec(s);
+  if (prefixed && prefixed[2]) {
+    vendor = 'cpython';
+    s = prefixed[2];
+  }
+  if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
+  if (s === 'lts' || s === '--lts') {
+    throw new SdkvmError(`Invalid Python version: "${input}"`, {
+      hint: 'Python has no lts alias — use "3", "3.12", "3.12.7", or "latest"',
+    });
+  }
+  if (PYTHON_VERSION_RE.test(s)) {
+    return { vendor, spec: { kind: 'full', version: s } };
+  }
+  const line = /^(\d+)\.(\d+)$/.exec(s);
+  if (line && line[1] && line[2]) {
+    return { vendor, spec: { kind: 'line', major: Number(line[1]), minor: Number(line[2]) } };
+  }
+  if (/^\d+$/.test(s)) return { vendor, spec: { kind: 'major', major: Number(s) } };
+  throw new SdkvmError(`Invalid Python version: "${input}"`, {
+    hint: PYTHON_VERSION_HINT,
+  });
+}

@@ -60,11 +60,12 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
   const candidates = vendor ? all.filter((j) => j.version.vendor === vendor) : all;
 
   let matched: InstalledSdk[];
+  const loose = (j: InstalledSdk) => (spec.matchesLoose ? spec.matchesLoose(j.version) : true);
   if (parsed.kind === 'major') {
-    matched = candidates.filter((j) => j.version.major === parsed.major);
+    matched = candidates.filter((j) => loose(j) && j.version.major === parsed.major);
   } else if (parsed.kind === 'line') {
     matched = candidates.filter(
-      (j) => j.version.major === parsed.major && j.version.minor === parsed.minor,
+      (j) => loose(j) && j.version.major === parsed.major && j.version.minor === parsed.minor,
     );
   } else if (parsed.kind === 'lts') {
     const isLtsMajor = spec.isLtsMajor;
@@ -75,7 +76,7 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
     }
     matched = candidates.filter((j) => isLtsMajor(j.version.major));
   } else if (parsed.kind === 'latest') {
-    matched = candidates; // 排序后取最后一个即最新
+    matched = candidates.filter(loose); // 排序后取最后一个即最新；预发布可由 matchesLoose 排除
   } else {
     const v = parsed.version;
     matched = candidates.filter((j) => {

@@ -25,6 +25,11 @@ import {
   formatMinicondaVersion,
   parseMinicondaDirName,
   parseMinicondaUserSpec,
+  parsePythonVersion,
+  formatPythonVersion,
+  parsePythonDirName,
+  parsePythonUserSpec,
+  comparePythonVersions,
 } from '../src/core/version.js';
 import { SdkvmError } from '../src/util/errors.js';
 
@@ -360,5 +365,65 @@ describe('miniconda version parsing', () => {
     expect(formatMinicondaVersion(v as never)).toBe('py313_26.7.1-1');
     expect(parseMinicondaDirName('maven-3.9.9')).toBeNull();
     expect(parseMinicondaDirName('miniconda-26.7')).toBeNull();
+  });
+});
+
+describe('python version parsing', () => {
+  it('parses stable and prerelease, and drops the build date', () => {
+    expect(parsePythonVersion('cpython', '3.12.7')).toMatchObject({
+      major: 3,
+      minor: 12,
+      patch: 7,
+      extra: null,
+      build: null,
+    });
+    expect(parsePythonVersion('cpython', '3.14.0rc2')).toMatchObject({ extra: 'rc2', build: null });
+    expect(parsePythonVersion('cpython', '3.15.0a1').extra).toBe('a1');
+    expect(parsePythonVersion('cpython', 'cpython-3.13.1b2').extra).toBe('b2');
+    expect(formatPythonVersion(parsePythonVersion('cpython', '3.14.0rc2'))).toBe('3.14.0rc2');
+    expect(formatPythonVersion(parsePythonVersion('cpython', '3.12.7'))).toBe('3.12.7');
+  });
+
+  it('user spec: major / line / full / prerelease / latest / vendor prefix', () => {
+    expect(parsePythonUserSpec('3')).toEqual({ spec: { kind: 'major', major: 3 } });
+    expect(parsePythonUserSpec('3.12')).toEqual({ spec: { kind: 'line', major: 3, minor: 12 } });
+    expect(parsePythonUserSpec('3.12.7')).toEqual({ spec: { kind: 'full', version: '3.12.7' } });
+    expect(parsePythonUserSpec('3.14.0rc2')).toEqual({ spec: { kind: 'full', version: '3.14.0rc2' } });
+    expect(parsePythonUserSpec('latest')).toEqual({ spec: { kind: 'latest' } });
+    expect(parsePythonUserSpec('cpython-3.12.7')).toEqual({
+      vendor: 'cpython',
+      spec: { kind: 'full', version: '3.12.7' },
+    });
+  });
+
+  it('rejects lts and incomplete forms', () => {
+    let hint: string | undefined;
+    try {
+      parsePythonUserSpec('lts');
+    } catch (err) {
+      hint = (err as SdkvmError).hint;
+    }
+    expect(hint).toMatch(/no lts/);
+    expect(() => parsePythonUserSpec('3.12.7-rc2')).toThrow(/Invalid Python version/);
+    expect(() => parsePythonUserSpec('latest-3.12')).toThrow(/Invalid Python version/);
+  });
+
+  it('dir name parse round-trip', () => {
+    const stable = parsePythonDirName('cpython-3.12.7');
+    expect(stable?.vendor).toBe('cpython');
+    expect(formatPythonVersion(stable as never)).toBe('3.12.7');
+    const pre = parsePythonDirName('cpython-3.14.0rc2');
+    expect(formatPythonVersion(pre as never)).toBe('3.14.0rc2');
+    expect(parsePythonDirName('python-3.12.7')).toBeNull();
+    expect(parsePythonDirName('cpython-3.12')).toBeNull();
+  });
+
+  it('ranks a release ahead of its prerelease, and rc10 ahead of rc2', () => {
+    const v = (s: string) => parsePythonVersion('cpython', s);
+    expect(comparePythonVersions(v('3.14.0'), v('3.14.0rc2'))).toBeGreaterThan(0);
+    expect(comparePythonVersions(v('3.14.0rc10'), v('3.14.0rc2'))).toBeGreaterThan(0);
+    expect(comparePythonVersions(v('3.14.0rc2'), v('3.14.0b1'))).toBeGreaterThan(0);
+    expect(comparePythonVersions(v('3.14.0b1'), v('3.14.0a2'))).toBeGreaterThan(0);
+    expect(comparePythonVersions(v('3.15.0a1'), v('3.14.0'))).toBeGreaterThan(0);
   });
 });

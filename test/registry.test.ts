@@ -83,6 +83,28 @@ describe('registry', () => {
     expect(findInstalled('miniconda', '26').dirPath.endsWith('miniconda-py314_26.7.1-1')).toBe(true);
   });
 
+  it('python loose specs skip an installed prerelease', () => {
+    const root = path.join(home, 'pythons');
+    fs.mkdirSync(path.join(root, 'cpython-3.12.7'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'cpython-3.14.0rc2'), { recursive: true });
+    expect(findInstalled('python', 'latest').dirPath.endsWith('cpython-3.12.7')).toBe(true);
+    expect(findInstalled('python', '3').dirPath.endsWith('cpython-3.12.7')).toBe(true);
+    expect(findInstalled('python', '3.12').dirPath.endsWith('cpython-3.12.7')).toBe(true);
+    expect(findInstalled('python', '3.14.0rc2').dirPath.endsWith('cpython-3.14.0rc2')).toBe(true);
+    expect(() => findInstalled('python', '3.14')).toThrow(SdkvmError);
+  });
+
+  it('python line and latest prefer the final release over a prerelease of the same numbers', () => {
+    const root = path.join(home, 'pythons');
+    fs.mkdirSync(path.join(root, 'cpython-3.12.7'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'cpython-3.14.0rc2'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'cpython-3.14.0'), { recursive: true });
+    expect(findInstalled('python', 'latest').dirPath.endsWith('cpython-3.14.0')).toBe(true);
+    expect(findInstalled('python', '3.14').dirPath.endsWith('cpython-3.14.0')).toBe(true);
+    expect(findInstalled('python', '3.14.0').dirPath.endsWith('cpython-3.14.0')).toBe(true);
+    expect(findInstalled('python', '3.14.0rc2').dirPath.endsWith('cpython-3.14.0rc2')).toBe(true);
+  });
+
   it('no match throws with installed list', () => {
     mkJdk('temurin-21.0.5+11');
     try {

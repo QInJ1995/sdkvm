@@ -1,7 +1,7 @@
 {
   "name": "sdkvm",
   "version": "1.0.5",
-  "description": "SDK version manager — Java (Temurin / Zulu / Corretto), Go, Flutter, Node.js, Maven & Miniconda",
+  "description": "SDK version manager — Java (Temurin / Zulu / Corretto), Go, Flutter, Node.js, Maven, Miniconda & Python",
   "type": "module",
   "bin": {
     "sdkvm": "dist/index.js"
@@ -40,6 +40,8 @@
     "maven",
     "miniconda",
     "conda",
+    "python",
+    "cpython",
     "version-manager",
     "temurin",
     "zulu",

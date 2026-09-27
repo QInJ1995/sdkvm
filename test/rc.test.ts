@@ -117,12 +117,24 @@ describe('miniconda rc block', () => {
     expect(rcBlock('java')).not.toContain('conda.sh');
     expect(rcBlock('node')).not.toContain('conda.sh');
     expect(rcBlock('maven')).not.toContain('conda.sh');
+    expect(rcBlock('python')).not.toContain('conda.sh');
+  });
+});
+
+describe('python rc block', () => {
+  it('exports PYTHON_HOME and prepends bin', () => {
+    const block = rcBlock('python');
+    expect(block).toContain('PYTHON_HOME=');
+    expect(block).toContain('current-python');
+    expect(block).toContain('"$HOME/.sdkvm/current-python"');
+    expect(block).toContain('"$PYTHON_HOME/bin:$PATH"');
+    expect(block).not.toContain('conda.sh');
   });
 });
 
 describe('rc separator safety', () => {
   it('no backslash separators in any block (shell syntax)', () => {
-    for (const t of ['java', 'go', 'flutter', 'node', 'maven', 'miniconda'] as const) {
+    for (const t of ['java', 'go', 'flutter', 'node', 'maven', 'miniconda', 'python'] as const) {
       expect(rcBlock(t)).not.toMatch(/\\/);
     }
   });

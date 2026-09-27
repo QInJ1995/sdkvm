@@ -76,6 +76,9 @@ describe('mirror presets', () => {
 
     const miniconda = listMirrorSitesForType('miniconda').map((s) => s.name);
     expect(miniconda).toEqual(['nju', 'tuna', 'ustc', 'official']);
+
+    const python = listMirrorSitesForType('python').map((s) => s.name);
+    expect(python).toEqual(['official']);
   });
 
   it('scopes vendor URLs per type', () => {

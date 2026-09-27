@@ -18,7 +18,7 @@ const program = new Command();
 
 program
   .name('sdkvm')
-  .description('SDK version manager — install & switch JDKs (Temurin / Zulu / Corretto), Go toolchains, Flutter SDKs, Node.js runtimes, Apache Maven, and Miniconda')
+  .description('SDK version manager — install & switch JDKs (Temurin / Zulu / Corretto), Go toolchains, Flutter SDKs, Node.js runtimes, Apache Maven, Miniconda, and CPython')
   .version(getVersion());
 
 const INSTALL_HELP: Record<SdkTypeId, string> = {
@@ -28,6 +28,7 @@ const INSTALL_HELP: Record<SdkTypeId, string> = {
   node: '22 | 22.20.0 | lts | latest | nodejs-22.20.0',
   maven: '3 | 3.9 | 3.9.9 | 4.0.0-rc-4 | latest | maven-3.9',
   miniconda: '26 | 26.7 | 26.7.1-1 | py313 | py313_26.7.1-1 | latest',
+  python: '3 | 3.12 | 3.12.7 | 3.14.0rc2 | latest',
 };
 
 const VERSION_EXAMPLE: Record<SdkTypeId, string> = {
@@ -37,6 +38,7 @@ const VERSION_EXAMPLE: Record<SdkTypeId, string> = {
   node: '22 / nodejs-22.20.0',
   maven: '3.9 / maven-3.9.9',
   miniconda: '26.7 / miniconda-py313_26.7.1-1',
+  python: '3.12 / cpython-3.12.7',
 };
 
 /** 某类型的一组命令（install/use/ls/uninstall/mirror）挂到给定 commander 节点上 */
@@ -117,6 +119,10 @@ mavenCmd.action(() => mavenCmd.help());
 const minicondaCmd = program.command('miniconda').description('Miniconda subcommands');
 registerSdkCommands(minicondaCmd, 'miniconda');
 minicondaCmd.action(() => minicondaCmd.help());
+
+const pythonCmd = program.command('python').description('CPython subcommands');
+registerSdkCommands(pythonCmd, 'python');
+pythonCmd.action(() => pythonCmd.help());
 
 // 裸 current 显示全部类型
 program.commands.find((c) => c.name() === 'current')?.action(() => currentCommand());

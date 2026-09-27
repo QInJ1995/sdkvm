@@ -1,7 +1,7 @@
 import type { SdkTypeId } from '../sdk/types.js';
 
 /** 支持镜像的 vendor id（与 applyMirror / 历史 RECOMMENDED 对齐） */
-export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven' | 'miniconda';
+export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven' | 'miniconda' | 'cpython';
 
 export interface MirrorSite {
   name: string;
@@ -20,6 +20,7 @@ export const MIRRORABLE_BY_TYPE: Record<SdkTypeId, readonly MirrorVendorId[]> = 
   node: ['nodejs'],
   maven: ['maven'],
   miniconda: ['miniconda'],
+  python: ['cpython'],
 };
 
 /**
@@ -28,6 +29,7 @@ export const MIRRORABLE_BY_TYPE: Record<SdkTypeId, readonly MirrorVendorId[]> = 
  * nju / tuna 不含 maven：它们的 Apache 发行目录不是 Maven Central 路径。
  * miniconda 只收录安装器目录（Miniconda3-*.sh / .exe），不是 pkgs/ 频道。
  * aliyun 的 /anaconda/miniconda 返回 404，不收录。
+ * cpython 的镜像根必须接 /{tag}/{filename}。国内站没有核对过这条路径，不写预设；用 mirror set 手填。
  */
 export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
   {
