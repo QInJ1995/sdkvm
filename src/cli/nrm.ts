@@ -1,7 +1,10 @@
 import { loadConfig, updateConfig } from '../core/config.js';
-import { run } from '../util/spawn.js';
+import { npmExec, run } from '../util/spawn.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
+import { LIST_NAME_RE, formatListLine, normalizeRegistryUrl } from '../ui/listformat.js';
+
+export { normalizeRegistryUrl };
 
 export interface NpmRegistryEntry {
   /** 列表展示名 */
@@ -25,12 +28,7 @@ export const NPM_REGISTRY_PRESETS: readonly NpmRegistryEntry[] = [
   { name: 'huawei', url: 'https://repo.huaweicloud.com/repository/npm/', list: true },
 ];
 
-const NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const TEST_TIMEOUT_MS = 5_000;
-
-export function normalizeRegistryUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '').toLowerCase();
-}
 
 export function isBuiltinRegistryName(name: string): boolean {
   const key = name.trim().toLowerCase();
@@ -61,9 +59,7 @@ export function matchListedRegistryName(registryUrl: string): string | null {
 }
 
 export function formatNrmListLine(name: string, url: string, current: boolean): string {
-  const mark = current ? '*' : ' ';
-  const padded = `${name} `.padEnd(14, '-');
-  return `${mark} ${padded} ${url}`;
+  return formatListLine(name, url, current);
 }
 
 export type NpmRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
@@ -71,11 +67,16 @@ export type RegistryProbe = (url: string) => Promise<number>;
 
 async function defaultNpmRunner(args: string[]): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await run('npm', args);
+    const { cmd, prefixArgs } = npmExec();
+    return await run(cmd, [...prefixArgs, ...args]);
   } catch (err) {
-    if (err instanceof SdkvmError && /Failed to run npm/.test(err.message)) {
+    if (err instanceof SdkvmError && /npm is not available/.test(err.message)) {
+      throw err; // npmExec 已给出安装引导提示
+    }
+    if (err instanceof SdkvmError) {
+      // 调用层面的失败（如找不到可执行文件）统一给安装引导提示
       throw new SdkvmError('npm is not available', {
-        hint: 'Install Node.js first, or run: sdkvm node use lts',
+        hint: `Check your Node.js/npm installation. Detail: ${err.message}`,
       });
     }
     throw err;
@@ -151,7 +152,7 @@ export async function nrmUse(name: string, npmRun: NpmRunner = defaultNpmRunner)
 
 export function nrmAdd(name: string, url: string): void {
   const key = name.trim();
-  if (!NAME_RE.test(key)) {
+  if (!LIST_NAME_RE.test(key)) {
     throw new SdkvmError(`Invalid registry name "${name}"`, {
       hint: 'Use letters, digits, _ or -; must start with a letter',
     });

@@ -150,3 +150,21 @@ describe('silent installer command', () => {
     expect(() => assertInstallerPrefix('/Users/Qin Jin/.sdkvm/minicondas/miniconda-py313_26.7.1-1', 'mac')).not.toThrow();
   });
 });
+
+describe('index 健壮性', () => {
+  it('接受带属性的 <tr> 行', () => {
+    const html = [
+      '<table>',
+      '<tr class="row"><td><a href="Miniconda3-latest-MacOSX-arm64.sh">x</a></td><td>abc</td></tr>',
+      `<tr class="odd"><td><a href="Miniconda3-py313_26.7.1-1-MacOSX-arm64.sh">y</a></td><td><code>${'a'.repeat(64)}</code></td></tr>`,
+      '</table>',
+    ].join('\n');
+    const files = parseMinicondaIndex(html);
+    expect(files.map((f) => f.filename)).toEqual(['Miniconda3-py313_26.7.1-1-MacOSX-arm64.sh']);
+  });
+
+  it('页面取回但零行解析时 listMajors 明确报错', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>moved</html>')));
+    await expect(minicondaVendor.listMajors()).rejects.toThrow(/index format unrecognized/);
+  });
+});

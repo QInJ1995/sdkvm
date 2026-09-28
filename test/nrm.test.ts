@@ -15,6 +15,7 @@ import {
   nrmUse,
 } from '../src/cli/nrm.js';
 import { loadConfig } from '../src/core/config.js';
+import { npmCliPath } from '../src/util/spawn.js';
 import { SdkvmError } from '../src/util/errors.js';
 import { log } from '../src/ui/log.js';
 
@@ -29,6 +30,15 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
   delete process.env.SDKVM_HOME;
   vi.restoreAllMocks();
+});
+
+describe('npmExec helpers', () => {
+  it('locates npm-cli.js next to the node executable', () => {
+    const node = path.join('C:', 'Program Files', 'nodejs', 'node.exe');
+    expect(npmCliPath(node)).toBe(
+      path.join('C:', 'Program Files', 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    );
+  });
 });
 
 describe('nrm presets', () => {

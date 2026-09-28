@@ -34,7 +34,12 @@ async function resolveLatestRedirect(
   }
   const location = res.headers.get('location');
   if (!location) throw new SdkvmError(`Adoptium API returned no redirect for JDK ${major}`);
-  return location;
+  // Location 只接受 https（相对地址按原始 URL 解析）
+  const abs = new URL(location, url);
+  if (abs.protocol !== 'https:') {
+    throw new SdkvmError(`Adoptium redirect for JDK ${major} is not https: ${abs.href}`);
+  }
+  return location.startsWith('https:') ? location : abs.href;
 }
 
 /**
@@ -71,8 +76,16 @@ function githubAssetUrl(version: string, os: string, arch: string): string {
     const file = `OpenJDK8U-jdk_${arch}_${os}_hotspot_${legacy.token}.${ext}`;
     return `https://github.com/adoptium/temurin8-binaries/releases/download/${legacy.tag}/${file}`;
   }
+  if (v.major === 8) {
+    // JDK 8 的 release 都是 8uNNN-bNN 形式：不带 build 号（8.0.504）或带 extra 段的写法
+    // 都拼不出真实存在的 asset，与其等到下载 404，不如在解析阶段给出版本语法提示。
+    throw new SdkvmError(`Temurin JDK 8 needs an update+build version, got "${version}"`, {
+      hint: 'Use e.g. 8.0.504+6 (see https://github.com/adoptium/temurin8-binaries/tags), or "sdkvm java install 8" for the latest 8',
+    });
+  }
   const major = v.major;
-  const underscored = formatVersion(v).replace('+', '_');
+  // 文件名直接用用户输入的版本正文：formatVersion 会把 21.0.0 折叠成 21，拼出错URL
+  const underscored = version.replace('+', '_');
   const file = `OpenJDK${major}U-jdk_${arch}_${os}_hotspot_${underscored}.${ext}`;
   return `https://github.com/adoptium/temurin${major}-binaries/releases/download/jdk-${encodeURIComponent(version)}/${file}`;
 }

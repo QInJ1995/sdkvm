@@ -2,9 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig, updateConfig } from '../core/config.js';
+import { acquireLock, releaseLock } from '../core/lock.js';
 import { envGet } from '../core/env.js';
 import { SdkvmError } from '../util/errors.js';
+import { escapeRegExp } from '../util/regex.js';
 import { log } from '../ui/log.js';
+import { LIST_NAME_RE, formatListLine, normalizeRegistryUrl } from '../ui/listformat.js';
 
 export interface MavenRegistryEntry {
   /** 列表展示名 */
@@ -37,7 +40,6 @@ export const MAVEN_REGISTRY_PRESETS: readonly MavenRegistryEntry[] = [
   },
 ];
 
-const NAME_RE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const TEST_TIMEOUT_MS = 5_000;
 const PROBE_POM = 'org/apache/maven/maven-artifact/3.9.9/maven-artifact-3.9.9.pom';
 
@@ -60,9 +62,7 @@ export interface SettingsTarget {
 
 export type MavenRepoProbe = (url: string) => Promise<number>;
 
-export function normalizeRegistryUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '').toLowerCase();
-}
+export { normalizeRegistryUrl };
 
 export function defaultMavenSettingsPath(): string {
   return path.join(os.homedir(), '.m2', 'settings.xml');
@@ -128,13 +128,7 @@ export function matchListedMavenRegistry(registryUrl: string): string | null {
 }
 
 export function formatMrmListLine(name: string, url: string, current: boolean): string {
-  const mark = current ? '*' : ' ';
-  const padded = `${name} `.padEnd(14, '-');
-  return `${mark} ${padded} ${url}`;
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return formatListLine(name, url, current);
 }
 
 function countOf(hay: string, needle: string): number {
@@ -343,7 +337,12 @@ function writeSettings(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, ensureTrailingNewline(content));
-  fs.renameSync(tmp, file);
+  try {
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 function officialUrl(): string {
@@ -417,12 +416,20 @@ export function mrmUse(name: string, opts: { settings?: string } = {}): void {
   const entry = findMavenRegistry(name);
   if (!entry) throw unknownRegistry(name);
   const target = resolveSettingsTarget(opts.settings);
-  const existing = readFileIfExists(target.file);
-  const next =
-    entry.name === 'official'
-      ? applyMrmBlock(existing, null)
-      : applyMrmBlock(existing, { name: entry.name, url: entry.url });
-  if (next !== existing) writeSettings(target.file, next);
+  // settings.xml 读-改-写与 config 一样要进锁，避免并发 mrm use 互相覆盖
+  acquireLock();
+  let existing = '';
+  let next = '';
+  try {
+    existing = readFileIfExists(target.file);
+    next =
+      entry.name === 'official'
+        ? applyMrmBlock(existing, null)
+        : applyMrmBlock(existing, { name: entry.name, url: entry.url });
+    if (next !== existing) writeSettings(target.file, next);
+  } finally {
+    releaseLock();
+  }
   if (entry.name === 'official') {
     log.ok('maven mirror → official (Central, no sdkvm mirror)');
   } else {
@@ -436,7 +443,7 @@ export function mrmUse(name: string, opts: { settings?: string } = {}): void {
 
 export function mrmAdd(name: string, url: string): void {
   const key = name.trim();
-  if (!NAME_RE.test(key)) {
+  if (!LIST_NAME_RE.test(key)) {
     throw new SdkvmError(`Invalid registry name "${name}"`, {
       hint: 'Use letters, digits, _ or -; must start with a letter',
     });

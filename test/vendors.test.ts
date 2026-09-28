@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { temurinVendor } from '../src/vendor/temurin.js';
+import { log } from '../src/ui/log.js';
 import { zuluVendor as zulu, zuluVersionMatches } from '../src/vendor/zulu.js';
 import { canonicalCorrettoVersion, correttoVendor } from '../src/vendor/corretto.js';
 
@@ -64,6 +65,20 @@ describe('temurin', () => {
     const a = await temurinVendor.resolve({ kind: 'full', version: '21.0.5+11' }, MAC);
     expect(a.downloadUrl).toBe(
       'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz',
+    );
+  });
+
+  it('keeps X.0.0 uncollapsed in the asset file name', async () => {
+    const a = await temurinVendor.resolve({ kind: 'full', version: '21.0.0' }, MAC);
+    expect(a.downloadUrl).toContain('OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.0.tar.gz');
+  });
+
+  it('rejects JDK 8 full versions that cannot name a real asset', async () => {
+    await expect(temurinVendor.resolve({ kind: 'full', version: '8.0.504' }, LIN)).rejects.toThrow(
+      /needs an update\+build version/,
+    );
+    await expect(temurinVendor.resolve({ kind: 'full', version: '8.0.504.1+1' }, LIN)).rejects.toThrow(
+      /needs an update\+build version/,
     );
   });
 
@@ -137,6 +152,35 @@ describe('zulu', () => {
     expect(zuluVersionMatches([21, 0, 1, 2], '21.0.1')).toBe(true);
     expect(zuluVersionMatches([21, 0, 10], '21.0.1')).toBe(false);
     expect(zuluVersionMatches([21, 0, 12, 1], '21')).toBe(true);
+  });
+
+  it('version match strips the +build segment (Azul keeps builds in distro_version)', () => {
+    expect(zuluVersionMatches([21, 0, 5], '21.0.5+11')).toBe(true);
+    expect(zuluVersionMatches([21, 0, 5, 1], '21.0.5+11')).toBe(true);
+    expect(zuluVersionMatches([21, 0, 10], '21.0.5+11')).toBe(false);
+  });
+
+  it('full spec with build resolves and distro_version breaks ties', async () => {
+    const sameJava = [
+      {
+        name: 'zulu21.30.15-ca-jdk21.0.5-macosx_aarch64.tar.gz',
+        download_url: 'https://cdn.azul.com/zulu/bin/zulu21.30.15.tar.gz',
+        java_version: [21, 0, 5],
+        distro_version: [21, 30, 15, 0],
+        sha256_hash: 'aa'.repeat(32),
+      },
+      {
+        name: 'zulu21.56.17-ca-jdk21.0.5-macosx_aarch64.tar.gz',
+        download_url: 'https://cdn.azul.com/zulu/bin/zulu21.56.17.tar.gz',
+        java_version: [21, 0, 5],
+        distro_version: [21, 56, 17, 0],
+        sha256_hash: 'bb'.repeat(32),
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => resJson(sameJava)));
+    const a = await zulu.resolve({ kind: 'full', version: '21.0.5+11' }, MAC);
+    expect(a.downloadUrl).toBe('https://cdn.azul.com/zulu/bin/zulu21.56.17.tar.gz');
+    expect(a.checksum?.expected).toBe('bb'.repeat(32));
   });
 
   it('full version does not pick a longer patch via string prefix', async () => {
@@ -336,5 +380,49 @@ describe('corretto', () => {
     const majors = await correttoVendor.listMajors();
     expect(majors.every((m) => m.lts)).toBe(true);
     expect(majors.map((m) => m.key)).toEqual(['8', '11', '17', '21', '25']);
+  });
+});
+
+describe('zulu listMajors', () => {
+  it('warns and hides only the failed majors', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/v3/info/available_releases')) {
+        return resJson({ available_releases: [17, 21], available_lts_releases: [21] });
+      }
+      if (u.includes('java_version=17')) {
+        return resJson([
+          {
+            name: 'zulu17.56.19-ca-jdk17.0.12-macosx_aarch64.tar.gz',
+            download_url: 'https://cdn.azul.com/zulu/bin/z17.tar.gz',
+            java_version: [17, 0, 12],
+            distro_version: [17, 56, 19, 0],
+          },
+        ]);
+      }
+      return new Response('boom', { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    try {
+      const lines = await zulu.listMajors();
+      expect(lines.map((l) => l.key)).toEqual(['17']);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('21'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('throws when every major fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        if (String(url).includes('/v3/info/available_releases')) {
+          return resJson({ available_releases: [17], available_lts_releases: [] });
+        }
+        return new Response('boom', { status: 500 });
+      }),
+    );
+    await expect(zulu.listMajors()).rejects.toThrow(/all majors/);
   });
 });

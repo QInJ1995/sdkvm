@@ -1,5 +1,16 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { rcBegin, rcEnd, rcBlock, stripRcBlock, upsertRcContent } from '../src/shell/rc.js';
+import {
+  rcBegin,
+  rcEnd,
+  rcBlock,
+  removeRcBlockFromFile,
+  stripRcBlock,
+  upsertRcContent,
+  upsertRcFile,
+} from '../src/shell/rc.js';
 
 /** 避免宿主环境的 SDKVM_HOME（如 /Volumes/Develop/sdkvm）干扰默认路径断言 */
 let savedSdkvmHome: string | undefined;
@@ -137,5 +148,44 @@ describe('rc separator safety', () => {
     for (const t of ['java', 'go', 'flutter', 'node', 'maven', 'miniconda', 'python'] as const) {
       expect(rcBlock(t)).not.toMatch(/\\/);
     }
+  });
+});
+
+describe('rc robustness', () => {
+  it('strips a block whose end marker was lost (no duplicate after upsert)', () => {
+    const broken = `export A=1\n\n${rcBegin('java')}\nexport JAVA_HOME="x"\n`;
+    const out = upsertRcContent(broken, 'java');
+    expect(out.split(rcBegin('java')).length - 1).toBe(1);
+    expect(out).toContain('export A=1');
+  });
+
+  it('single-quotes paths containing shell metacharacters', () => {
+    process.env.SDKVM_HOME = '/tmp/sdkvm-bad-$path`x';
+    try {
+      const block = rcBlock('java');
+      expect(block).toMatch(/export JAVA_HOME='/);
+      expect(block).not.toContain('$HOME');
+    } finally {
+      delete process.env.SDKVM_HOME;
+    }
+  });
+
+  it('removeRcBlockFromFile removes the block from disk', () => {
+    const file = path.join(os.tmpdir(), `sdkvm-rc-${process.pid}.rc`);
+    fs.writeFileSync(file, upsertRcContent('export A=1\n', 'java'));
+    removeRcBlockFromFile(file, 'java');
+    const after = fs.readFileSync(file, 'utf8');
+    expect(after).not.toContain(rcBegin('java'));
+    expect(after).toContain('export A=1');
+    fs.rmSync(file, { force: true });
+  });
+
+  it('upsertRcFile backs up non-UTF-8 rc content before rewriting', () => {
+    const file = path.join(os.tmpdir(), `sdkvm-rc-bin-${process.pid}.rc`);
+    fs.writeFileSync(file, Buffer.from('export A=1 # caf\xe9\n', 'latin1'));
+    upsertRcFile(file, 'java');
+    expect(fs.existsSync(`${file}.sdkvm-bak`)).toBe(true);
+    fs.rmSync(file, { force: true });
+    fs.rmSync(`${file}.sdkvm-bak`, { force: true });
   });
 });

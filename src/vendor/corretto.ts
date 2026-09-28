@@ -16,7 +16,8 @@ export function canonicalCorrettoVersion(input: string): string {
 }
 
 const BASE = 'https://corretto.aws/downloads';
-const MAJORS = [8, 11, 17, 21, 25];
+/** Corretto 只发布 LTS 线；major 集从 Adoptium 对齐的 LTS_MAJORS 派生 */
+const MAJORS = [...LTS_MAJORS].sort((a, b) => a - b);
 
 /** latest 重定向入口的文件名（已验证：aarch64-macos / x64-linux / x64-windows） */
 function latestFileName(major: number, platform: VendorPlatform): string {

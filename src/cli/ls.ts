@@ -50,6 +50,10 @@ async function listRemote(type: SdkTypeId, opts: { vendor?: string }): Promise<v
       }
     }),
   );
+  // 全部厂商都失败时不应表现为成功（单厂商失败已有 warn）
+  if (sections.length > 0 && sections.every((sec) => sec === null)) {
+    process.exitCode = 1;
+  }
 
   for (const sec of sections) {
     if (!sec || sec.lines.length === 0) continue;

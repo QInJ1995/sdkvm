@@ -64,3 +64,50 @@ export function normalizeExtracted(tmpDir: string, platform: Platform, type: Sdk
   }
   return { root, home };
 }
+
+/**
+ * 解压结果必须全部落在 destDir 内（zip-slip / tar 符号链接穿越的收尾防线）。
+ * 外部 tar/unzip 对 `..` 成员与符号链接的处理因实现而异，
+ * 在把根目录改名进安装目录之前做一次包含性审计：条目不得逃逸、符号链接不得外指。
+ */
+export function assertContained(destDir: string, root: string): void {
+  const base = path.resolve(destDir);
+  const within = (p: string): boolean => {
+    const resolved = path.resolve(p);
+    return resolved === base || resolved.startsWith(base + path.sep);
+  };
+  if (!within(root)) {
+    throw new SdkvmError('Archive root lies outside the extraction directory', { hint: root });
+  }
+  const walk = (dir: string): void => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = path.join(dir, ent.name);
+      if (!within(entryPath)) {
+        throw new SdkvmError(`Archive entry escapes the extraction directory: ${ent.name}`, {
+          hint: entryPath,
+        });
+      }
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(entryPath);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        let real: string | null = null;
+        try {
+          real = fs.realpathSync(entryPath);
+        } catch {
+          real = null;
+        }
+        if (!real || !within(real)) {
+          throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
+            hint: real ?? entryPath,
+          });
+        }
+      }
+      if (st.isDirectory()) walk(entryPath);
+    }
+  };
+  walk(destDir);
+}

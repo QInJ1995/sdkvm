@@ -1,7 +1,6 @@
 import os from 'node:os';
 import path from 'node:path';
 import { run } from '../util/spawn.js';
-import { SdkvmError } from '../util/errors.js';
 import { paths } from '../core/paths.js';
 import { detectPlatform } from '../core/platform.js';
 import { getSdkType } from '../sdk/index.js';
@@ -75,7 +74,7 @@ export async function ensureUserPathWin(entry: string): Promise<void> {
   await run('powershell.exe', encoded(ps));
 }
 
-/** 卸载辅助：从用户 PATH 移除 entry（不存在则忽略） */
+/** 卸载辅助：从用户 PATH 移除 entry（不存在则忽略）。保留 Path 原值类型，与 ensureUserPathWin 对称。 */
 export async function removeFromUserPathWin(entry: string): Promise<void> {
   const escaped = entry.replace(/'/g, "''");
   const ps = [
@@ -84,7 +83,22 @@ export async function removeFromUserPathWin(entry: string): Promise<void> {
     "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
     "$raw=[string]$k.GetValue('Path','',$fmt)",
     `$parts=@($raw -split ';' | Where-Object { $_ -ne '' -and $_ -ne '${escaped}' })`,
-    "$k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
+    "$kind=[Microsoft.Win32.RegistryValueKind]::ExpandString",
+    "if($k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String){ $kind=[Microsoft.Win32.RegistryValueKind]::String }",
+    "$k.SetValue('Path', ($parts -join ';'), $kind)",
+    ...broadcastPs(),
+  ].join('\n');
+  await run('powershell.exe', encoded(ps));
+}
+
+/** 卸载辅助：删除用户级环境变量值（不存在则忽略）并广播 */
+export async function removeEnvWin(name: string): Promise<void> {
+  const escaped = name.replace(/'/g, "''");
+  const ps = [
+    "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
+    "if(-not $k){ exit 0 }",
+    `if($null -ne $k.GetValue('${escaped}')){ $k.DeleteValue('${escaped}') }`,
+    ...broadcastPs(),
   ].join('\n');
   await run('powershell.exe', encoded(ps));
 }
@@ -95,15 +109,4 @@ export function sdkPathEntries(type: SdkTypeId): string[] {
   const platform = detectPlatform();
   const suffixes = spec.envPathSuffixes?.(platform) ?? [spec.envBinSuffix(platform)];
   return suffixes.map((suffix) => `%${spec.envVar}%${suffix}`);
-}
-
-/** 某类型环境变量对应的第一段 PATH 项（如 %JAVA_HOME%\bin；node 在 windows 无 bin/ → %NODE_HOME%） */
-export function sdkPathEntry(type: SdkTypeId): string {
-  return sdkPathEntries(type)[0] ?? '';
-}
-
-export function assertWindows(): void {
-  if (process.platform !== 'win32') {
-    throw new SdkvmError('This operation is Windows-only');
-  }
 }

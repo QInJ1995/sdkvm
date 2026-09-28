@@ -79,6 +79,12 @@ describe('parseVersion', () => {
     expect(() => parseVersion('temurin', 'abc')).toThrow(SdkvmError);
     expect(() => parseVersion('temurin', '21.x.5')).toThrow(SdkvmError);
   });
+
+  it('rejects hex / scientific / negative segments Number() would accept', () => {
+    expect(() => parseVersion('temurin', '21.0x10')).toThrow(SdkvmError);
+    expect(() => parseVersion('temurin', '21.1e2')).toThrow(SdkvmError);
+    expect(() => parseVersion('temurin', '21.-1')).toThrow(SdkvmError);
+  });
 });
 
 describe('compareVersions', () => {
@@ -442,5 +448,16 @@ describe('python version parsing', () => {
     expect(comparePythonVersions(v('3.14.0rc2'), v('3.14.0b1'))).toBeGreaterThan(0);
     expect(comparePythonVersions(v('3.14.0b1'), v('3.14.0a2'))).toBeGreaterThan(0);
     expect(comparePythonVersions(v('3.15.0a1'), v('3.14.0'))).toBeGreaterThan(0);
+  });
+});
+
+describe('java 旧式 1.x 语法', () => {
+  it('1.8 等价于 major 8', () => {
+    expect(parseUserSpec('1.8')).toEqual({ spec: { kind: 'major', major: 8 } });
+    expect(parseUserSpec('zulu-1.8')).toEqual({ vendor: 'zulu', spec: { kind: 'major', major: 8 } });
+  });
+
+  it('1.8.0_392 这类更新号写法被拒绝并给出改写提示', () => {
+    expect(() => parseUserSpec('1.8.0_392')).toThrow(/Invalid version: "1\.8\.0_392"/);
   });
 });

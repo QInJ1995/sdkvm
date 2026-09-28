@@ -4,6 +4,7 @@ import { SdkvmError } from '../util/errors.js';
 import { compareVersions, formatFlutterVersion, parseFlutterVersion, type SdkVersion } from '../core/version.js';
 import { detectPlatform } from '../core/platform.js';
 import { cmdPath } from '../cli/cmdname.js';
+import { groupMinorLines, specLabel } from './shared.js';
 
 /** 官方发布清单按 OS 分文件（releases_macos.json 等）；归档 URL = manifest.base_url + '/' + archive */
 const MANIFEST_BASE = 'https://storage.googleapis.com/flutter_infra_release/releases';
@@ -71,12 +72,6 @@ function buildArtifact(
   };
 }
 
-function specLabel(spec: VersionSpec): string {
-  if (spec.kind === 'line') return `${spec.major}.${spec.minor}`;
-  if (spec.kind === 'full') return spec.version;
-  return 'latest';
-}
-
 export const flutterVendor: Vendor = {
   id: 'flutter',
   label: 'Flutter (official)',
@@ -86,16 +81,12 @@ export const flutterVendor: Vendor = {
   /** 一条 minor 线（3.47）等价 java 的一个 major；latest/line 只看 stable 通道 */
   async listMajors(): Promise<ReleaseLine[]> {
     const { stable } = await fetchEntries(detectPlatform());
-    const lines = new Map<string, SdkVersion>();
-    for (const { v } of stable) {
-      const key = `${v.major}.${v.minor}`;
-      const cur = lines.get(key);
-      if (!cur || compareVersions(v, cur) > 0) lines.set(key, v);
-    }
-    return [...lines.entries()]
-      .map(([key, v]) => ({ key, v }))
-      .sort((a, b) => compareVersions(b.v, a.v))
-      .map(({ key, v }) => ({ key, lts: false, latestFullVersion: formatFlutterVersion(v) }));
+    return groupMinorLines(
+      stable.map(({ v }) => v),
+      (v) => `${v.major}.${v.minor}`,
+      compareVersions,
+      formatFlutterVersion,
+    );
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {

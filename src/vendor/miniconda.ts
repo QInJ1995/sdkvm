@@ -11,6 +11,7 @@ import {
   type SdkVersion,
 } from '../core/version.js';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
+import { groupMinorLines, specLabel } from './shared.js';
 
 /** Miniconda 安装器目录。版本清单与 SHA256 始终走这里；镜像只改安装器 URL。 */
 export const MINICONDA_ARCHIVE = 'https://repo.anaconda.com/miniconda';
@@ -30,7 +31,7 @@ const FILE_RE =
 /** 从官方目录页抽出 Miniconda3 安装器。忽略 latest 别名、.pkg 和四段旧版本号。 */
 export function parseMinicondaIndex(html: string): MinicondaFile[] {
   const out: MinicondaFile[] = [];
-  for (const row of html.matchAll(/<tr>([\s\S]*?)<\/tr>/gi)) {
+  for (const row of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
     const body = row[1] ?? '';
     const href = /href="(Miniconda3-[^"]+)"/.exec(body);
     const sha = />([0-9a-f]{64})</i.exec(body);
@@ -85,13 +86,6 @@ function uniqueDesc(files: MinicondaFile[]): SdkVersion[] {
   return [...map.values()].sort((a, b) => compareVersions(b, a));
 }
 
-function specLabel(spec: VersionSpec): string {
-  if (spec.kind === 'major') return String(spec.major);
-  if (spec.kind === 'line') return `${spec.major}.${spec.minor}`;
-  if (spec.kind === 'full') return spec.version;
-  return spec.kind;
-}
-
 function pick(versions: SdkVersion[], spec: VersionSpec): SdkVersion | undefined {
   if (spec.kind === 'latest') return versions[0];
   if (spec.kind === 'major') return versions.find((v) => v.major === spec.major);
@@ -103,15 +97,7 @@ function pick(versions: SdkVersion[], spec: VersionSpec): SdkVersion | undefined
 /** 当前平台实际有安装器的 minor 线。Intel Mac 没有 26.7 时不会把别的架构的最新版列出来。 */
 export function minicondaReleaseLines(files: MinicondaFile[], platform: VendorPlatform): ReleaseLine[] {
   const versions = uniqueDesc(files.filter((file) => matchesPlatform(file, platform)));
-  const lines = new Map<string, SdkVersion>();
-  for (const v of versions) {
-    const key = formatMinicondaLine(v);
-    const cur = lines.get(key);
-    if (!cur || compareVersions(v, cur) > 0) lines.set(key, v);
-  }
-  return [...lines.entries()]
-    .sort((a, b) => compareVersions(b[1], a[1]))
-    .map(([key, v]) => ({ key, lts: false, latestFullVersion: formatMinicondaVersion(v) }));
+  return groupMinorLines(versions, formatMinicondaLine, compareVersions, formatMinicondaVersion);
 }
 
 function buildArtifact(file: MinicondaFile): ResolvedArtifact {
@@ -128,7 +114,14 @@ function buildArtifact(file: MinicondaFile): ResolvedArtifact {
 }
 
 async function fetchIndex(): Promise<MinicondaFile[]> {
-  return parseMinicondaIndex(await httpText(`${MINICONDA_ARCHIVE}/`));
+  const files = parseMinicondaIndex(await httpText(`${MINICONDA_ARCHIVE}/`));
+  // 页面结构变化时明确报错，而不是让 ls -r / resolve 静默变成空列表
+  if (files.length === 0) {
+    throw new SdkvmError('Miniconda index format unrecognized', {
+      hint: `${MINICONDA_ARCHIVE}/ listed no Miniconda3 installer rows`,
+    });
+  }
+  return files;
 }
 
 export const minicondaVendor: Vendor = {

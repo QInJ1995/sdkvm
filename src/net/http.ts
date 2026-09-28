@@ -27,6 +27,22 @@ async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
   return res;
 }
 
+/** https 请求被重定向降级到 http 时拒绝（fetch 默认会跟随降级） */
+function assertNoDowngrade(requestedUrl: string, res: Response): void {
+  if (!res.url) return;
+  let from: URL;
+  let to: URL;
+  try {
+    from = new URL(requestedUrl);
+    to = new URL(res.url);
+  } catch {
+    return;
+  }
+  if (from.protocol === 'https:' && to.protocol !== 'https:') {
+    throw new HttpError(`Blocked redirect downgrade ${from.protocol}// → ${to.protocol}//`, 0, res.url);
+  }
+}
+
 /** fetch 封装：5xx/网络错误重试，4xx 不重试直接抛 */
 export async function httpFetch(url: string, init: RequestInit = {}): Promise<Response> {
   let lastErr: unknown;
@@ -38,6 +54,7 @@ export async function httpFetch(url: string, init: RequestInit = {}): Promise<Re
         await releaseBody(res);
         return res;
       }
+      if (res.ok) assertNoDowngrade(url, res);
       if (res.status >= 500 && attempt < RETRIES) {
         await releaseBody(res);
         lastErr = new HttpError(`Server error ${res.status}`, res.status, url);

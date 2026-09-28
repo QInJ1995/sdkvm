@@ -102,8 +102,13 @@ export async function replaceCliPackage(archiveFile: string, home = sdkvmHome())
   fs.rmSync(staging, { recursive: true, force: true });
 }
 
-/** Windows 升级脚本正文（导出便于单测） */
+/** Windows 升级脚本正文（导出便于单测）。home 含 cmd 元字符时无法安全内插，直接拒绝 */
 export function windowsUpgradeScript(home: string): string {
+  if (/["%&^]/.test(home)) {
+    throw new SdkvmError(`sdkvm home cannot be embedded in a Windows batch script: ${home}`, {
+      hint: 'Move sdkvm to a path without \" % & ^ characters, or upgrade with: npm update -g sdkvm',
+    });
+  }
   return [
     '@echo off',
     'setlocal',

@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { extractArchive } from '../src/fs/extract.js';
-import { normalizeExtracted } from '../src/fs/layout.js';
+import { assertContained, normalizeExtracted } from '../src/fs/layout.js';
 import { SdkvmError } from '../src/util/errors.js';
 import type { Platform } from '../src/core/platform.js';
 
@@ -77,5 +77,26 @@ describe('extract + normalize', () => {
     const dest = path.join(work, 'out-bad');
     await extractArchive(tgz, 'tar.gz', dest, MAC);
     expect(() => normalizeExtracted(dest, MAC, 'java')).toThrow(SdkvmError);
+  });
+});
+
+describe('assertContained', () => {
+  it('accepts a normal tree', () => {
+    const dir = path.join(work, 'ok-tree');
+    fs.mkdirSync(path.join(dir, 'jdk', 'bin'), { recursive: true });
+    expect(() => assertContained(dir, path.join(dir, 'jdk'))).not.toThrow();
+  });
+
+  it('rejects a root outside destDir', () => {
+    expect(() => assertContained(path.join(work, 'a'), path.join(work, 'b'))).toThrow(
+      /outside the extraction directory/,
+    );
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects symlinks pointing outside', () => {
+    const dir = path.join(work, 'bad-tree');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.symlinkSync(os.tmpdir(), path.join(dir, 'escape'));
+    expect(() => assertContained(dir, dir)).toThrow(/symlink points outside/);
   });
 });

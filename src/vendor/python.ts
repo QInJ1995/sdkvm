@@ -11,6 +11,7 @@ import {
   type SdkVersion,
 } from '../core/version.js';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
+import { specLabel } from './shared.js';
 
 /** 版本清单。SHA256SUMS 与这份 JSON 始终走官方；镜像只改归档 URL。 */
 export const CPYTHON_LATEST_JSON =
@@ -44,6 +45,10 @@ export interface PythonFile {
 interface LatestRelease {
   tag?: string;
   asset_url_prefix?: string;
+}
+
+interface GithubRelease {
+  tag_name?: string;
 }
 
 export function pythonTriple(platform: VendorPlatform): string {
@@ -103,13 +108,6 @@ function versionsDesc(files: PythonFile[]): SdkVersion[] {
   return [...map.values()].sort((a, b) => comparePythonVersions(b, a));
 }
 
-function specLabel(spec: VersionSpec): string {
-  if (spec.kind === 'major') return String(spec.major);
-  if (spec.kind === 'line') return `${spec.major}.${spec.minor}`;
-  if (spec.kind === 'full') return spec.version;
-  return spec.kind;
-}
-
 /** latest / major / line 只在稳定版里取最新；full 可以是预发布。输入不必预先排序。 */
 export function pickPythonVersion(versions: SdkVersion[], spec: VersionSpec): SdkVersion | undefined {
   const ordered = [...versions].sort((a, b) => comparePythonVersions(b, a));
@@ -123,7 +121,10 @@ export function pickPythonVersion(versions: SdkVersion[], spec: VersionSpec): Sd
   return undefined;
 }
 
-/** 当前平台实际有归档的稳定 minor 线。只有预发布的线不列出。 */
+/**
+ * 当前平台实际有归档的稳定 minor 线。只有预发布的线不列出。
+ * 不用 shared 的 groupMinorLines：预发布要先滤掉再取线首，语义与其它 vendor 不同。
+ */
 export function pythonReleaseLines(files: PythonFile[], platform: VendorPlatform): ReleaseLine[] {
   const triple = pythonTriple(platform);
   const versions = versionsDesc(preferStripped(files.filter((file) => file.triple === triple))).filter(
@@ -156,6 +157,46 @@ function buildArtifact(file: PythonFile, prefix: string): ResolvedArtifact {
     checksum: { kind: 'sha256', expected: file.sha256 },
     archive: 'tar.gz',
   };
+}
+
+/** 历史 release 标签（full 版本回退用；GitHub releases 按时间倒序，tag 为 YYYYMMDD 日期式） */
+async function recentReleaseTags(): Promise<string[]> {
+  const releases = await httpJson<GithubRelease[]>(
+    'https://api.github.com/repos/astral-sh/python-build-standalone/releases?per_page=5',
+  );
+  return releases.map((r) => r.tag_name ?? '').filter((t) => /^\d{8}$/.test(t));
+}
+
+/** 取某个 tag 的 SHA256SUMS；拉不到或为空返回 null */
+async function fetchTagRelease(tag: string): Promise<{ prefix: string; files: PythonFile[] } | null> {
+  const prefix = `${CPYTHON_DOWNLOAD_PREFIX}/${tag}`;
+  let text: string;
+  try {
+    text = await httpText(`${prefix}/SHA256SUMS`);
+  } catch {
+    return null;
+  }
+  const files = parsePythonSums(text);
+  return files.length > 0 ? { prefix, files } : null;
+}
+
+/** full 规格在最新 release 缺失时，回退查最近几个历史 release（老 patch 只在旧 tag 里） */
+async function resolveFromRecentTag(
+  spec: VersionSpec & { kind: 'full' },
+  platform: VendorPlatform,
+): Promise<ResolvedArtifact | null> {
+  for (const tag of await recentReleaseTags()) {
+    const hit = await fetchTagRelease(tag);
+    if (!hit) continue;
+    const forPlatform = filesFor(hit.files, platform);
+    const target = pickPythonVersion(versionsDesc(forPlatform), spec);
+    if (!target) continue;
+    const file = forPlatform.find(
+      (item) => formatPythonVersion(item.version) === formatPythonVersion(target),
+    );
+    if (file) return buildArtifact(file, hit.prefix);
+  }
+  return null;
 }
 
 async function fetchRelease(): Promise<{ prefix: string; files: PythonFile[] }> {
@@ -202,6 +243,10 @@ export const cpythonVendor: Vendor = {
     const target = pickPythonVersion(versionsDesc(forPlatform), spec);
     if (!target) {
       const existsElsewhere = pickPythonVersion(versionsDesc(anywhere), spec);
+      if (!existsElsewhere && spec.kind === 'full') {
+        const fromTag = await resolveFromRecentTag(spec, platform);
+        if (fromTag) return fromTag;
+      }
       if (existsElsewhere) {
         throw new SdkvmError(
           `No Python ${formatPythonVersion(existsElsewhere)} archive for ${platform.os}/${platform.arch}`,

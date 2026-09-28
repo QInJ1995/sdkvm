@@ -4,6 +4,10 @@ import { withLock } from '../core/lock.js';
 import { clearCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
+import { detectPlatform } from '../core/platform.js';
+import { detectRcFile } from '../shell/detect.js';
+import { removeRcBlockFromFile } from '../shell/rc.js';
+import { removeFromUserPathWin, removeEnvWin, sdkPathEntries } from '../shell/winenv.js';
 import { log } from '../ui/log.js';
 import { cmdPath } from './cmdname.js';
 
@@ -13,14 +17,31 @@ export async function uninstallCommand(
   opts: { vendor?: string },
 ): Promise<void> {
   const spec = getSdkType(type);
+  const platform = detectPlatform();
   const installed = findInstalled(type, specInput, opts.vendor);
   await withLock(async () => {
-    if (currentSdk(type)?.dirPath === installed.dirPath) {
-      clearCurrent(type);
-      log.warn(`uninstalled the current ${spec.label}; ${spec.envVar} is now dangling`);
-      log.info(`select another: ${cmdPath(type)} use <version>`);
-    }
     fs.rmSync(installed.dirPath, { recursive: true, force: true });
+    if (currentSdk(type)?.dirPath !== installed.dirPath) return;
+    // 卸载的是当前版本：清掉 current 链接与 rc / 注册表里的环境痕迹，避免悬空的 JAVA_HOME 等
+    clearCurrent(type);
+    if (platform.os === 'windows') {
+      await removeEnvWin(spec.envVar);
+      for (const entry of sdkPathEntries(type)) {
+        await removeFromUserPathWin(entry);
+      }
+      log.warn(`removed ${spec.envVar} and its PATH entries (uninstalled the current ${spec.label})`);
+    } else {
+      const rc = detectRcFile(platform.os);
+      if (rc) {
+        removeRcBlockFromFile(rc, type);
+        log.warn(`removed the ${type} block from ${rc} (uninstalled the current ${spec.label})`);
+      } else {
+        log.warn(
+          `uninstalled the current ${spec.label}; remove ${spec.envVar} from your shell rc manually`,
+        );
+      }
+    }
+    log.info(`select another: ${cmdPath(type)} use <version>`);
   });
   log.ok(`removed ${installed.version.vendor}-${spec.formatVersion(installed.version)}`);
 }

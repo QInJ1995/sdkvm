@@ -119,3 +119,12 @@ describe('replaceCliPackage', () => {
     expect(fs.existsSync(path.join(home, 'cli.next'))).toBe(false);
   });
 });
+
+describe('windowsUpgradeScript home 校验', () => {
+  it('拒绝含 cmd 元字符的 home', () => {
+    expect(() => windowsUpgradeScript('C:\\sd"kvm')).toThrow(/batch/);
+    expect(() => windowsUpgradeScript('C:\\sd&kvm')).toThrow(/batch/);
+    expect(() => windowsUpgradeScript('C:\\sd%kvm')).toThrow(/batch/);
+    expect(() => windowsUpgradeScript('C:\\sd^kvm')).toThrow(/batch/);
+  });
+});

@@ -37,12 +37,13 @@ export function parseVersion(vendor: VendorId, input: string): SdkVersion {
   if (segs.length === 0) {
     throw new SdkvmError(`Invalid JDK version: "${input}"`);
   }
-  const nums = segs.map((x) => Number(x));
-  if (nums.some((n) => !Number.isInteger(n) || n < 0)) {
+  // 每段必须是纯十进制数字：Number() 会把 "0x10"/"1e2" 当成 16/100 放行
+  if (segs.some((x) => !/^\d+$/.test(x))) {
     throw new SdkvmError(`Invalid JDK version: "${input}"`, {
       hint: 'Expected forms: 21, 21.0.5, 21.0.5+11',
     });
   }
+  const nums = segs.map((x) => Number(x));
   return {
     vendor,
     major: nums[0] as number,
@@ -97,16 +98,25 @@ export function toDirName(v: SdkVersion): string {
   return `${v.vendor}-${formatVersion(v)}`;
 }
 
-/** java 安装目录名 → 版本；不匹配返回 null */
-export function parseDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${JAVA_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
+/** 安装目录名解析器工厂：<vendor>-<version> 目录名 → 版本；不匹配或解析失败返回 null */
+function makeDirNameParser(
+  ids: readonly string[],
+  parse: (vendor: VendorId, version: string) => SdkVersion,
+): (dir: string) => SdkVersion | null {
+  const re = new RegExp(`^(${ids.join('|')})-(.+)$`);
+  return (dir) => {
+    const m = re.exec(dir);
+    if (!m || !m[1] || !m[2]) return null;
+    try {
+      return parse(m[1], m[2]);
+    } catch {
+      return null;
+    }
+  };
 }
+
+/** java 安装目录名 → 版本；不匹配返回 null */
+export const parseDirName = makeDirNameParser(JAVA_VENDOR_IDS, parseVersion);
 
 function numericPairwise(a: string | null, b: string | null): number {
   const as = a ? a.split('.') : [];
@@ -205,6 +215,14 @@ export function parseUserSpec(input: string): UserSpec {
     s = m[2];
   }
   if (s === 'lts' || s === '--lts') return { vendor, spec: { kind: 'lts' } };
+  // 旧式 1.x 写法：1.8 即 8；更细的旧式（1.8.0_392）给出现代写法提示
+  const legacy = /^1\.(\d+)([._].*)?$/.exec(s);
+  if (legacy && legacy[1]) {
+    if (!legacy[2]) return { vendor, spec: { kind: 'major', major: Number(legacy[1]) } };
+    throw new SdkvmError(`Invalid version: "${input}"`, {
+      hint: `Legacy 1.x syntax only maps the major — use "${legacy[1]}" for the latest, or the modern form like ${legacy[1]}.0.392+b06`,
+    });
+  }
   if (/^\d+$/.test(s)) return { vendor, spec: { kind: 'major', major: Number(s) } };
   if (/^\d+(\.\d+)*(\+[0-9.]+)?$/.test(s)) return { vendor, spec: { kind: 'full', version: s } };
   throw new SdkvmError(`Invalid version: "${input}"`, {
@@ -243,15 +261,7 @@ export function formatGoVersion(v: SdkVersion): string {
 }
 
 /** go 安装目录名 → 版本；不匹配返回 null */
-export function parseGoDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${GO_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseGoVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parseGoDirName = makeDirNameParser(GO_VENDOR_IDS, parseGoVersion);
 
 /** go 版本语法：1.24（该 minor 线最新）/ 1.24.5（精确）/ latest，可带 golang- 前缀 */
 export function parseGoUserSpec(input: string): UserSpec {
@@ -305,15 +315,7 @@ export function formatFlutterVersion(v: SdkVersion): string {
 }
 
 /** flutter 安装目录名 → 版本；不匹配返回 null */
-export function parseFlutterDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${FLUTTER_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseFlutterVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parseFlutterDirName = makeDirNameParser(FLUTTER_VENDOR_IDS, parseFlutterVersion);
 
 /** flutter 版本语法：3.47（minor 线最新，stable 通道）/ 3.47.5（精确，可含 prerelease）/ latest，可带 flutter- 前缀 */
 export function parseFlutterUserSpec(input: string): UserSpec {
@@ -371,15 +373,7 @@ export function formatNodeVersion(v: SdkVersion): string {
 }
 
 /** node 安装目录名 → 版本；不匹配返回 null */
-export function parseNodeDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${NODE_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseNodeVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parseNodeDirName = makeDirNameParser(NODE_VENDOR_IDS, parseNodeVersion);
 
 /** node 版本语法：22（major 线最新）/ lts / latest / 22.20.0（精确），可带 nodejs-/node- 前缀 */
 export function parseNodeUserSpec(input: string): UserSpec {
@@ -436,15 +430,7 @@ export function formatMavenVersion(v: SdkVersion): string {
 }
 
 /** maven 安装目录名 → 版本；不匹配返回 null */
-export function parseMavenDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${MAVEN_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseMavenVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parseMavenDirName = makeDirNameParser(MAVEN_VENDOR_IDS, parseMavenVersion);
 
 /**
  * maven 版本语法：3（major 最新稳定）/ 3.9（minor 线最新稳定）/ 3.9.9（精确）/
@@ -551,15 +537,7 @@ export function minicondaMatchesFull(installed: SdkVersion, specVersion: string)
 }
 
 /** miniconda 安装目录名 → 版本；不匹配返回 null */
-export function parseMinicondaDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${MINICONDA_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parseMinicondaVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parseMinicondaDirName = makeDirNameParser(MINICONDA_VENDOR_IDS, parseMinicondaVersion);
 
 /**
  * miniconda 版本语法：26（该 major 最新）/ 26.7（minor 线最新）/
@@ -664,15 +642,7 @@ export function comparePythonVersions(a: SdkVersion, b: SdkVersion): number {
 }
 
 /** python 安装目录名 → 版本；不匹配返回 null */
-export function parsePythonDirName(dir: string): SdkVersion | null {
-  const m = new RegExp(`^(${PYTHON_VENDOR_IDS.join('|')})-(.+)$`).exec(dir);
-  if (!m || !m[1] || !m[2]) return null;
-  try {
-    return parsePythonVersion(m[1], m[2]);
-  } catch {
-    return null;
-  }
-}
+export const parsePythonDirName = makeDirNameParser(PYTHON_VENDOR_IDS, parsePythonVersion);
 
 /**
  * python 版本语法：3（该 major 最新稳定）/ 3.12（minor 线最新稳定）/

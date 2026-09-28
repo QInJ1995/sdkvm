@@ -1,4 +1,15 @@
 import type { SdkTypeId } from '../sdk/types.js';
+import {
+  FLUTTER_VENDOR_IDS,
+  GO_VENDOR_IDS,
+  JAVA_VENDOR_IDS,
+  MAVEN_VENDOR_IDS,
+  MINICONDA_VENDOR_IDS,
+  NODE_VENDOR_IDS,
+  PYTHON_VENDOR_IDS,
+} from '../core/version.js';
+import { MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
+import { formatListLine } from '../ui/listformat.js';
 
 /** 支持镜像的 vendor id（与 applyMirror / 历史 RECOMMENDED 对齐） */
 export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven' | 'miniconda' | 'cpython';
@@ -12,15 +23,20 @@ export interface MirrorSite {
   vendors: Partial<Record<MirrorVendorId, string>>;
 }
 
+/** 各类型 vendor 全集里支持镜像改写的子集（真相在 MIRROR_REWRITE_VENDORS） */
+function mirrorableOf(vendorIds: readonly string[]): MirrorVendorId[] {
+  return vendorIds.filter((id): id is MirrorVendorId => MIRROR_REWRITE_VENDORS.has(id));
+}
+
 /** SDK 类型 → 可镜像的 vendor（本版每类型至多一个） */
 export const MIRRORABLE_BY_TYPE: Record<SdkTypeId, readonly MirrorVendorId[]> = {
-  java: ['temurin'],
-  go: ['golang'],
-  flutter: ['flutter'],
-  node: ['nodejs'],
-  maven: ['maven'],
-  miniconda: ['miniconda'],
-  python: ['cpython'],
+  java: mirrorableOf(JAVA_VENDOR_IDS),
+  go: mirrorableOf(GO_VENDOR_IDS),
+  flutter: mirrorableOf(FLUTTER_VENDOR_IDS),
+  node: mirrorableOf(NODE_VENDOR_IDS),
+  maven: mirrorableOf(MAVEN_VENDOR_IDS),
+  miniconda: mirrorableOf(MINICONDA_VENDOR_IDS),
+  python: mirrorableOf(PYTHON_VENDOR_IDS),
 };
 
 /**
@@ -182,9 +198,7 @@ export function matchMirrorSiteName(
 }
 
 export function formatMirrorListLine(name: string, detail: string, current: boolean): string {
-  const mark = current ? '*' : ' ';
-  const padded = `${name} `.padEnd(14, '-');
-  return `${mark} ${padded} ${detail}`;
+  return formatListLine(name, detail, current);
 }
 
 export function availableSiteNamesForType(type: SdkTypeId): string[] {

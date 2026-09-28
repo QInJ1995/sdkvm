@@ -26,7 +26,11 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
     const version = spec.parseDirName(name);
     if (!version) continue;
     const dirPath = path.join(root, name);
-    if (!fs.statSync(dirPath).isDirectory()) continue;
+    try {
+      if (!fs.statSync(dirPath).isDirectory()) continue;
+    } catch {
+      continue; // 扫描期间被并发卸载删除
+    }
     result.push({ type, version, dirPath, home: spec.locateHome(dirPath) });
   }
   result.sort((a, b) => spec.compareVersions(a.version, b.version));

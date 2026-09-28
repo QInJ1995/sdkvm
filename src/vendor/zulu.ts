@@ -1,10 +1,11 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
 import { httpFetch } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
-import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
+import { LTS_MAJORS, compareVersions, formatVersion, parseVersion } from '../core/version.js';
 import { detectPlatform } from '../core/platform.js';
 import { temurinVendor } from './temurin.js';
 import { cmdPath } from '../cli/cmdname.js';
+import { log } from '../ui/log.js';
 
 const API = 'https://api.azul.com/metadata/v1';
 
@@ -28,13 +29,36 @@ interface ZuluPackage {
 /**
  * major（如 "21"）：匹配该大版本。
  * 完整/部分版本：精确相等，或带段边界的前缀（"21.0.1" 可匹配 "21.0.1.2"，不匹配 "21.0.10"）。
+ * "+build" 段先剥离：Azul 的 build 号在 distro_version，不在 java_version 里。
  */
-export function zuluVersionMatches(javaVersion: number[], wanted: string): boolean {
+export function zuluVersionMatches(javaVersion: number[], wantedRaw: string): boolean {
+  if (!wantedRaw) return true;
+  const wanted = wantedRaw.split('+')[0] ?? wantedRaw;
   if (!wanted) return true;
   const actual = javaVersion.join('.');
   if (actual === wanted) return true;
   if (/^\d+$/.test(wanted)) return javaVersion[0] === Number(wanted);
   return actual.startsWith(`${wanted}.`);
+}
+
+/** 数字数组逐段比较（distro_version 决胜用）：[21,52,203] < [21,53,1] */
+function compareNumericArrays(a: number[], b: number[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y ? 1 : -1;
+  }
+  return 0;
+}
+
+/** 候选升序：java_version 为主，同 java_version 的多个构建以 distro_version 决胜 */
+function compareZuluPackages(a: ZuluPackage, b: ZuluPackage): number {
+  const va = parseVersion('zulu', a.java_version.join('.'));
+  const vb = parseVersion('zulu', b.java_version.join('.'));
+  const byJava = compareVersions(va, vb);
+  if (byJava !== 0) return byJava;
+  return compareNumericArrays(a.distro_version, b.distro_version);
 }
 
 /** 客户端过滤：只要普通 ca-jdk 构建（API 的过滤参数不可靠：会漏进 crac/fx-jre） */
@@ -51,12 +75,7 @@ function pickPlainJdk(
     if (wanted && !zuluVersionMatches(p.java_version, wanted)) return false;
     return true;
   });
-  candidates.sort((a, b) => {
-    const ja = a.java_version.join('.').localeCompare(b.java_version.join('.'), undefined, {
-      numeric: true,
-    });
-    return ja;
-  });
+  candidates.sort(compareZuluPackages);
   return candidates[candidates.length - 1] ?? null;
 }
 
@@ -127,6 +146,7 @@ export const zuluVendor: Vendor = {
     // 用 Adoptium 的 OpenJDK 发布节奏作为 major 全集，逐个探测 Zulu 是否有构建
     const universe = await temurinVendor.listMajors();
     const platform = detectPlatform();
+    const failed: string[] = [];
     const results = await Promise.all(
       universe.map(async ({ key }): Promise<ReleaseLine | null> => {
         try {
@@ -135,10 +155,18 @@ export const zuluVendor: Vendor = {
           if (!pick) return null;
           return { key, lts: LTS_MAJORS.has(Number(key)), latestFullVersion: pick.java_version.join('.') };
         } catch {
+          // 静默吞掉会让 ls -r 无声缺行、lts 解析偏错：收集起来统一提示
+          failed.push(key);
           return null;
         }
       }),
     );
+    if (failed.length > 0) {
+      if (failed.length === universe.length) {
+        throw new SdkvmError(`Zulu listing failed for all majors (${failed.join(', ')})`);
+      }
+      log.warn(`Zulu listing failed for majors ${failed.join(', ')}; those lines are hidden`);
+    }
     return results.filter((r): r is ReleaseLine => r !== null);
   },
 

@@ -235,3 +235,38 @@ describe('python sdk layout', () => {
     expect(pythonSdk.matchesLoose?.(parsePythonVersion('cpython', '3.13.1'))).toBe(true);
   });
 });
+
+describe('full 规格回退历史 release 标签', () => {
+  const OLD_TAG = '20250301';
+  const oldPrefix = `${CPYTHON_DOWNLOAD_PREFIX}/${OLD_TAG}`;
+  const OLD_NAME = `cpython-3.11.9+${OLD_TAG}-aarch64-apple-darwin-install_only_stripped.tar.gz`;
+  const OLD_SUMS = [asset(OLD_NAME, SHA.old)].join('\n');
+
+  function stubWithHistory(apiTags: string[]): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.endsWith('latest-release.json')) return new Response(LATEST_JSON, { status: 200 });
+        if (u === `${PREFIX}/SHA256SUMS`) return new Response(SUMS, { status: 200 });
+        if (u.startsWith('https://api.github.com/')) return Response.json(apiTags.map((t) => ({ tag_name: t })));
+        if (u === `${oldPrefix}/SHA256SUMS`) return new Response(OLD_SUMS, { status: 200 });
+        throw new Error(`unexpected ${u}`);
+      }),
+    );
+  }
+
+  it('最新快照缺版本时从最近的历史标签解析', async () => {
+    stubWithHistory([OLD_TAG, TAG]);
+    const artifact = await cpythonVendor.resolve({ kind: 'full', version: '3.11.9' }, MAC);
+    expect(artifact.downloadUrl).toBe(`${oldPrefix}/${OLD_NAME}`);
+    expect(artifact.checksum).toEqual({ kind: 'sha256', expected: SHA.old });
+  });
+
+  it('历史标签也没有时才报错', async () => {
+    stubWithHistory([OLD_TAG]);
+    await expect(cpythonVendor.resolve({ kind: 'full', version: '3.9.1' }, MAC)).rejects.toThrow(
+      /No Python release matches/,
+    );
+  });
+});

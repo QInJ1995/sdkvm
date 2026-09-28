@@ -147,3 +147,18 @@ describe('applyMirror maven', () => {
     expect(checksumSidecarFallback(url, `${url}.sha512`, url)).toBeUndefined();
   });
 });
+
+describe('metadata 健壮性', () => {
+  it('页面不是 metadata XML 时明确报错', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>gateway error</html>')));
+    await expect(mavenVendor.listMajors()).rejects.toThrow(/format unrecognized/);
+  });
+
+  it('metadata 里没有可用版本时明确报错', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('<metadata><versioning><versions /></versioning></metadata>')),
+    );
+    await expect(mavenVendor.listMajors()).rejects.toThrow(/listed no versions/);
+  });
+});

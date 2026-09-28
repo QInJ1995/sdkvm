@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { paths } from './paths.js';
 import { SdkvmError } from '../util/errors.js';
+import { log } from '../ui/log.js';
 
 const STALE_MS = 5 * 60 * 1000;
 /** 持锁期间刷新 mtime，避免长下载被当成 stale */
@@ -25,24 +26,32 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
+  } catch (err) {
+    // EPERM：进程存在但当前用户无权发信号（Windows 上其它会话的进程）——视为存活，不能偷锁
+    if ((err as NodeJS.ErrnoException).code === 'EPERM') return true;
     return false;
   }
 }
 
 function writeLockInfo(startedAt: number): void {
-  fs.writeFileSync(
-    lockInfoPath(),
-    JSON.stringify({ pid: process.pid, startedAt, heartbeatAt: Date.now() }),
-  );
+  // tmp+rename 原子写：mkdir 之后、info.json 写完之前崩溃，等待者会误判 holder 未知而白等 STALE_MS
+  const file = lockInfoPath();
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, startedAt, heartbeatAt: Date.now() }));
+  fs.renameSync(tmp, file);
 }
+
+/** 心跳连续失败计数：dir mtime 刷不上来，STALE_MS 后锁会被别人当 stale 清走 */
+let heartbeatFailures = 0;
 
 function touchLock(): void {
   const lockDir = paths.lock();
   if (!fs.existsSync(lockDir)) return;
   const now = new Date();
+  let mtimeOk = false;
   try {
     fs.utimesSync(lockDir, now, now);
+    mtimeOk = true;
   } catch {
     // ignore
   }
@@ -58,6 +67,10 @@ function touchLock(): void {
     if (pid === process.pid) writeLockInfo(startedAt);
   } catch {
     // ignore
+  }
+  heartbeatFailures = mtimeOk ? 0 : heartbeatFailures + 1;
+  if (heartbeatFailures === 3) {
+    log.warn('sdkvm lock heartbeat keeps failing; another sdkvm may treat this lock as stale');
   }
 }
 
@@ -76,7 +89,13 @@ export function acquireLock(): void {
         fs.rmSync(lockDir, { recursive: true, force: true });
         return acquireLock();
       }
-      const stat = fs.statSync(lockDir);
+      // 持有者可能恰好在此期间退出（或另一个等待者已清走锁）：锁没了就直接重取
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(lockDir);
+      } catch {
+        return acquireLock();
+      }
       if (Date.now() - stat.mtimeMs > STALE_MS) {
         fs.rmSync(lockDir, { recursive: true, force: true });
         return acquireLock();

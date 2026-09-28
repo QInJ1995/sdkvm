@@ -8,6 +8,7 @@ import {
   type SdkVersion,
 } from '../core/version.js';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
+import { groupMinorLines, specLabel } from './shared.js';
 
 /** 列版本始终走官方 metadata；镜像只改归档 URL */
 const META_URL =
@@ -36,6 +37,10 @@ function tryParse(raw: string): ListedVersion | null {
 /** metadata 里的 <version>；忽略 <latest>/<release>（可能是预发布） */
 async function fetchListed(): Promise<ListedVersion[]> {
   const xml = await httpText(META_URL);
+  // 页面结构变化（如镜像返回 HTML 错误页）时明确报错，而不是静默给出空列表
+  if (!xml.includes('<metadata')) {
+    throw new SdkvmError('Maven metadata format unrecognized', { hint: META_URL });
+  }
   const out: ListedVersion[] = [];
   for (const m of xml.matchAll(/<version>([^<]+)<\/version>/g)) {
     const raw = m[1];
@@ -43,18 +48,14 @@ async function fetchListed(): Promise<ListedVersion[]> {
     const parsed = tryParse(raw);
     if (parsed) out.push(parsed);
   }
+  if (out.length === 0) {
+    throw new SdkvmError('Maven metadata listed no versions', { hint: META_URL });
+  }
   return out;
 }
 
 function stablesDesc(listed: ListedVersion[]): ListedVersion[] {
   return listed.filter((x) => x.stable).sort((a, b) => compareVersions(b.v, a.v));
-}
-
-function specLabel(spec: VersionSpec): string {
-  if (spec.kind === 'major') return String(spec.major);
-  if (spec.kind === 'line') return `${spec.major}.${spec.minor}`;
-  if (spec.kind === 'full') return spec.version;
-  return spec.kind;
 }
 
 function buildArtifact(v: SdkVersion, platform: VendorPlatform): ResolvedArtifact {
@@ -82,15 +83,12 @@ export const mavenVendor: Vendor = {
   /** 一条 minor 线（3.9）只含稳定版；预发布不单独成线 */
   async listMajors(): Promise<ReleaseLine[]> {
     const versions = stablesDesc(await fetchListed());
-    const lines = new Map<string, SdkVersion>();
-    for (const { v } of versions) {
-      const key = `${v.major}.${v.minor}`;
-      const cur = lines.get(key);
-      if (!cur || compareVersions(v, cur) > 0) lines.set(key, v);
-    }
-    return [...lines.entries()]
-      .sort((a, b) => compareVersions(b[1], a[1]))
-      .map(([key, v]) => ({ key, lts: false, latestFullVersion: formatMavenVersion(v) }));
+    return groupMinorLines(
+      versions.map(({ v }) => v),
+      (v) => `${v.major}.${v.minor}`,
+      compareVersions,
+      formatMavenVersion,
+    );
   },
 
   async resolve(spec: VersionSpec, platform: VendorPlatform): Promise<ResolvedArtifact> {

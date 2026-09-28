@@ -3,6 +3,7 @@ import { httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { compareVersions, formatGoVersion, parseGoVersion, type SdkVersion } from '../core/version.js';
 import { cmdPath } from '../cli/cmdname.js';
+import { groupMinorLines, specLabel } from './shared.js';
 
 const LIST_URL = 'https://go.dev/dl/?mode=json&include=all';
 
@@ -63,12 +64,6 @@ function buildArtifact(r: GoRelease, f: GoFile, v: SdkVersion): ResolvedArtifact
   };
 }
 
-function specLabel(spec: VersionSpec): string {
-  if (spec.kind === 'line') return `${spec.major}.${spec.minor}`;
-  if (spec.kind === 'full') return spec.version;
-  return 'latest';
-}
-
 export const golangVendor: Vendor = {
   id: 'golang',
   label: 'Go (official)',
@@ -78,15 +73,12 @@ export const golangVendor: Vendor = {
   /** go 无 major 概念：一条 minor 线（1.24）等价 java 的一个 major */
   async listMajors(): Promise<ReleaseLine[]> {
     const versions = await stableVersions();
-    const lines = new Map<string, SdkVersion>();
-    for (const { v } of versions) {
-      const key = `${v.major}.${v.minor}`;
-      const cur = lines.get(key);
-      if (!cur || compareVersions(v, cur) > 0) lines.set(key, v);
-    }
-    return [...lines.entries()]
-      .map(([key, v]) => ({ key, lts: false, latestFullVersion: formatGoVersion(v) }))
-      .sort((a, b) => compareVersions(parseGoVersion('golang', b.key), parseGoVersion('golang', a.key)));
+    return groupMinorLines(
+      versions.map(({ v }) => v),
+      (v) => `${v.major}.${v.minor}`,
+      compareVersions,
+      formatGoVersion,
+    );
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { installUseHint } from '../src/cli/install.js';
+import { installUseHint, refinedUseHint } from '../src/cli/install.js';
 import { findInstalled, listInstalled } from '../src/core/registry.js';
 import {
   parseFlutterVersion,
@@ -156,5 +156,27 @@ describe('registry', () => {
       expect(e).toBeInstanceOf(SdkvmError);
       expect((e as SdkvmError).hint).toContain('temurin-21.0.5+11');
     }
+  });
+});
+
+describe('refinedUseHint', () => {
+  it('刚装的就是该 major 最新时保持 major 提示', () => {
+    mkJdk('temurin-21.0.5+11');
+    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21');
+  });
+
+  it('该 major 已有更新的已装版本时退回完整版本号', () => {
+    mkJdk('temurin-21.0.6+7');
+    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21.0.5+11');
+  });
+
+  it('忽略其它 vendor 与其它 major', () => {
+    mkJdk('zulu-21.0.12.1');
+    mkJdk('temurin-17.0.13+11');
+    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21');
+  });
+
+  it('非 java/node 类型原样返回', () => {
+    expect(refinedUseHint('maven', parseMavenVersion('maven', '3.9.9'), '3.9')).toBe('3.9');
   });
 });
