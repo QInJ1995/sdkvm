@@ -2,7 +2,7 @@
 
 # sdkvm
 
-**A simple, cross-platform version manager for language SDKs**
+**A cross-platform version manager for language SDKs**
 
 [![npm version](https://img.shields.io/npm/v/sdkvm)](https://www.npmjs.com/package/sdkvm)
 [![CI](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml/badge.svg)](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml)
@@ -12,73 +12,126 @@
 
 [中文](./README.md) | English
 
-Manage **Java JDKs**, the **Go toolchain**, the **Flutter SDK**, the **Node.js runtime**, **Apache Maven**, **Miniconda**, and **CPython**.
+Install, switch, and remove **Java JDKs**, **Go toolchains**, the **Flutter SDK**,
+the **Node.js runtime**, **Apache Maven**, **Miniconda**, and **CPython** from one CLI.
 
 </div>
+
+---
 
 ## Contents
 
 - [Overview](#overview)
+- [Highlights](#highlights)
+- [Supported SDKs](#supported-sdks)
 - [Requirements](#requirements)
 - [Install](#install)
-- [Upgrade](#upgrade)
+- [Upgrading the CLI](#upgrading-the-cli)
 - [Quick start](#quick-start)
-- [Commands](#commands)
-- [Version syntax](#version-syntax)
+- [Command reference](#command-reference)
+- [Version specification](#version-specification)
+- [Exit codes](#exit-codes)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
-- [Mirrors and npm registry](#mirrors-and-npm-registry)
-- [Security](#security)
-- [FAQ](#faq)
+- [Mirrors and registries](#mirrors-and-registries)
+- [Security model](#security-model)
+- [Troubleshooting](#troubleshooting)
 - [Uninstall](#uninstall)
 - [Development](#development)
 - [License](#license)
 
 ## Overview
 
-`sdkvm` is a Node.js CLI that installs, switches, and removes SDKs.
+`sdkvm` is a Node.js CLI that manages multiple language SDKs from one place: it
+resolves, downloads, verifies, and installs SDKs from official sources or
+mirrors, and switches versions by retargeting a single symlink. Installed trees
+are never moved, and nothing is written outside sdkvm's own data root and a
+small set of marked shell-init or user-environment entries.
 
-| SDK     | Source                                                                                                                  | Notes                                                                               |
-| ------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Java    | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25                                            |
-| Go      | [go.dev](https://go.dev/dl/)                                                                                            | All historical stable releases                                                      |
-| Flutter | Official release manifest                                                                                               | stable / beta; both macOS architectures; Linux / Windows are x64 only               |
-| Node.js | [nodejs.org/dist](https://nodejs.org/dist)                                                                              | `lts` (currently 24 Krypton) / `latest` / major line; npm switches with the runtime |
-| Maven   | [Maven Central](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/)                                    | `3` / `3.9` / `latest` pick a stable release; prereleases need an exact version     |
-| Miniconda | [repo.anaconda.com/miniconda](https://repo.anaconda.com/miniconda/) | `26` / `26.7` / `py313` / `py313_26.7.1-1` / `latest`; the installer is about 150 MB |
-| Python | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) | `3` / `3.12` / `3.12.7` / `3.14.0rc2` / `latest`; prebuilt CPython, archive about 20–40 MB |
+Design goals:
 
-Behavior:
+- **Isolation.** Every version lives under one data root (default `~/.sdkvm`),
+  with one directory tree, one `current-*` link, and one set of environment
+  variables per SDK. Multiple versions coexist without interfering.
+- **Reversibility.** Host changes are minimal: a marked init block in the shell
+  rc on macOS / Linux, user-level environment variables on Windows. Everything
+  sdkvm writes can be removed precisely.
+- **Reliability.** Hashes are computed while archives stream in, mirrors and
+  installers are strictly verified, installs land atomically, failures leave no
+  partial state, and concurrent processes are serialized by a file lock.
+- **Extensibility.** Adding a language means implementing one vendor module;
+  `install` / `use` / `ls` / `uninstall` / `mirror` plus rc and registry
+  writes follow automatically.
 
-- Each SDK lives in its own directory. `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, `MAVEN_HOME`, `MINICONDA_HOME`, and `PYTHON_HOME` do not overwrite each other.
-- `use` updates one symlink (a junction on Windows). Installed trees are not moved.
-- Download URLs come from official APIs or the official directory listing. Go, Flutter, Node.js, Miniconda, and Python require a SHA-256 match. Maven requires the official SHA-512. Java vendors are verified when a checksum is available.
-- Temurin, Go, Flutter, Node.js, Maven, Miniconda, and Python accept a mirror. Checksums still come from the official manifest. `sdkvm miniconda mirror` only chooses where sdkvm downloads Miniconda itself. It does not change conda package channels. `sdkvm python mirror` only changes the CPython archive URL; the manifest stays official. Python has no verified preset site yet — use `mirror set`.
-- Adding a language means implementing one vendor module. See [Development](#development).
+## Highlights
+
+- Seven SDK types and three JDK distributions (Temurin / Zulu / Corretto) behind one interface.
+- One version-spec grammar — `lts`, `latest`, major lines, exact versions, and
+  vendor prefixes — shared by `install`, `use`, and `uninstall`.
+- Cross-platform: macOS (Apple Silicon / Intel), mainstream Linux (x64 / aarch64),
+  and Windows 10+ with junctions and `REG_EXPAND_SZ` user variables (no `setx` truncation).
+- Integrity: SHA-256 streamed during download and compared against official
+  manifests; Maven verifies the official SHA-512 (SHA-1 for old releases);
+  mirrored downloads and executable installers always require a verifiable hash.
+- Download acceleration: built-in mirror sites (nju / tuna / aliyun / huawei /
+  ustc) configured per SDK type, plus independent npm-registry (`nrm`) and
+  Maven dependency-mirror (`mrm`) managers.
+- Atomic installs: extract and validate in a temp directory, then move into
+  place once; checksum failures and interruptions leave no residue.
+- Concurrency safety: installs, switches, removals, and upgrades share an
+  exclusive file lock with PID liveness checks and heartbeats; crashed holders
+  are recovered automatically.
+- No preinstalled Node.js required: the official install script ships an
+  isolated runtime, with data and entrypoints under `SDKVM_HOME`.
+
+## Supported SDKs
+
+| SDK | Source | Version support | Notes |
+| --- | --- | --- | --- |
+| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only |
+| Go | [go.dev/dl](https://go.dev/dl/) | every historical stable release | `latest`, `1.24`, `1.24.5` |
+| Flutter | official release manifest | stable / beta | both macOS architectures; Linux / Windows are x64 only; beta needs the full prerelease |
+| Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts` (currently 24 Krypton) / `latest` / major line / exact | npm switches together with the runtime |
+| Maven | [Maven Central](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/) | all stable releases from 3.0; prereleases by exact version | no `lts` alias |
+| Miniconda | [repo.anaconda.com/miniconda](https://repo.anaconda.com/miniconda/) | `26` / `26.7` / `py313` / `py313_26.7.1-1` / `latest` | installer is about 150 MB; a silent install accepts the [Miniconda terms](https://www.anaconda.com/legal) |
+| Python | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) | `3` / `3.12` / `3.12.7` / `3.14.0rc2` / `latest` | prebuilt CPython, archive about 20–40 MB; independent of Miniconda |
 
 ## Requirements
 
-| Dependency | Version  | Notes                                                                         |
-| ---------- | -------- | ----------------------------------------------------------------------------- |
-| Node.js    | >= 18.15 | Required for an npm install. The install script ships an isolated runtime     |
-| OS         | —        | macOS (Apple Silicon / Intel), mainstream Linux, Windows 10+                  |
-| Extractor  | built in | `tar` on macOS / Linux. Windows uses bsdtar, then PowerShell `Expand-Archive` |
+| Dependency | Version | Notes |
+| --- | --- | --- |
+| Node.js | >= 18.15 | Required for the npm install method. The install script ships an isolated runtime |
+| OS | — | macOS (Apple Silicon / Intel), mainstream Linux, Windows 10+ |
+| Extractor | built in | `tar` on macOS / Linux; Windows uses bsdtar, falling back to PowerShell `Expand-Archive` |
 
 Platform limits:
 
-- Extracting Flutter (`.tar.xz`) on Linux needs `xz` (`xz-utils`). Mainstream distributions include it.
-- Official Flutter archives for Linux and Windows are x64 only. ARM Linux and ARM Windows cannot install Flutter. Both macOS architectures are supported.
-- The first `flutter` run builds an internal cache. That wait is expected.
-- Miniconda installers are about 150 MB. A silent install accepts the [Miniconda terms](https://www.anaconda.com/legal). The Windows install path cannot contain spaces; point `SDKVM_HOME` at a path without spaces. Windows is x64 only. macOS supports both architectures. Linux supports x64 and aarch64. A newer release may omit some of those platforms. An installer only runs after its SHA-256 checks out, mirrored or not.
-- Python uses the python-build-standalone `install_only_stripped` archive, falling back to `install_only`. macOS, Linux, and Windows are supported on both x64 and aarch64. Free-threaded builds, musl, and `x86_64_v2` / `v3` / `v4` are not installed. The list only reflects the latest build snapshot; an exact version missing there is looked up in the most recent release tags as a fallback.
+- Extracting Flutter (`.tar.xz`) on Linux requires `xz` (`xz-utils`); mainstream
+  distributions include it.
+- Official Flutter archives for Linux and Windows are x64 only; ARM Linux and
+  ARM Windows cannot install Flutter. Both macOS architectures are supported.
+- The first `flutter` run builds an internal cache; that wait is expected.
+- Miniconda: the Windows install path cannot contain spaces (point `SDKVM_HOME`
+  at a space-free path if needed); Windows is x64 only, macOS supports both
+  architectures, and Linux supports x64 and aarch64. Newer releases may publish
+  only some of those platforms. An installer runs only after its SHA-256 checks
+  out, mirrored or not.
+- Python uses the python-build-standalone `install_only_stripped` archive
+  (falling back to `install_only`) covering x64 and aarch64 on all three
+  systems. Free-threaded and musl builds and the `x86_64_v2` / `v3` / `v4`
+  variants are not installed. The list reflects the latest build snapshot; an
+  exact version missing there is looked up in the most recent release tags.
 
 ## Install
 
-**Prefer the install script**: no preinstalled Node.js, an isolated runtime for the CLI, data and entrypoint under `SDKVM_HOME` (default `~/.sdkvm`), and upgrades via `sdkvm upgrade`.
-
 ### Install script (recommended)
 
-Requires a [GitHub Release](https://github.com/QInJ1995/sdkvm/releases) that already contains `sdkvm.tgz` and `SHA256SUMS` (uploaded by CI after a `v*` tag).
+No preinstalled Node.js needed: the script downloads an isolated runtime used
+only by the CLI, and keeps all data and entrypoints under `SDKVM_HOME`
+(default `~/.sdkvm`). Later upgrades run `sdkvm upgrade`.
+
+Prerequisite: a [GitHub Release](https://github.com/QInJ1995/sdkvm/releases)
+containing `sdkvm.tgz` and `SHA256SUMS` (uploaded by CI after a `v*` tag is pushed).
 
 macOS / Linux:
 
@@ -92,27 +145,34 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/QInJ1995/sdkvm/main/install.ps1 | iex
 ```
 
-The script:
+What the script does:
 
-1. Downloads Node.js 22.20.0 into `$SDKVM_HOME/runtime` (CLI only; `sdkvm node use` does not change it).
-2. Downloads `sdkvm.tgz` from the GitHub Release, checks SHA-256, and extracts it to `$SDKVM_HOME/cli`.
-3. Writes `$SDKVM_HOME/bin/sdkvm` (on Windows, `%SDKVM_HOME%\bin\sdkvm.cmd`) and adds that directory to the shell profile / user PATH (zsh → `~/.zshrc`, bash → `~/.bash_profile` or `~/.bashrc`).
+1. Downloads Node.js 22.20.0 into `$SDKVM_HOME/runtime` (CLI use only;
+   `sdkvm node use` never touches it) and verifies it against the SHA-256 manifest.
+2. Downloads `sdkvm.tgz` from the GitHub Release, verifies SHA-256, and
+   extracts into `$SDKVM_HOME/cli` using a validate-then-atomic-replace flow
+   that keeps the previous version on failure.
+3. Writes the entrypoint `$SDKVM_HOME/bin/sdkvm` (`%SDKVM_HOME%\bin\sdkvm.cmd`
+   on Windows) and adds that directory to the shell profile (zsh → `~/.zshrc`;
+   bash → `~/.bash_profile` on macOS, `~/.bashrc` elsewhere) or the Windows
+   user PATH, then broadcasts the environment change.
 
-Then open a new terminal, or `source` the rc file, and check:
+Open a new terminal afterwards (or `source` the rc file) and verify:
 
 ```console
 $ sdkvm version
 1.0.5
 ```
 
-To use a custom data root, **pass `SDKVM_HOME` on the install command itself** (`curl | sh` does not read `~/.zshrc`):
+For a custom data root, **pass `SDKVM_HOME` on the install command itself**
+(`curl | sh` does not read `~/.zshrc`):
 
 ```sh
 SDKVM_HOME=/Volumes/Develop/sdkvm \
   curl -fsSL https://raw.githubusercontent.com/QInJ1995/sdkvm/main/install.sh | sh
 ```
 
-Override download prefixes when needed:
+Override download prefixes in restricted networks:
 
 ```sh
 SDKVM_NODE_DIST=https://npmmirror.com/mirrors/node \
@@ -122,7 +182,9 @@ SDKVM_RELEASE_BASE=https://github.com/QInJ1995/sdkvm/releases \
 
 ### npm / pnpm / yarn / bun (alternative)
 
-Use this when Node.js >= 18.15 is already installed and you want the package manager to own global tools. The CLI follows the `node` on `PATH`; a Node older than 18.15 can stop the CLI.
+Use this when Node.js >= 18.15 is already installed and you want the package
+manager to own global tools. The CLI follows the `node` on `PATH`; a Node older
+than 18.15 can stop the CLI from starting (`sdkvm node use 22` restores it).
 
 ```sh
 npm install -g sdkvm
@@ -131,29 +193,32 @@ yarn global add sdkvm
 bun add -g sdkvm
 ```
 
-## Upgrade
+## Upgrading the CLI
 
-| Install method       | Command               | What changes                                                         |
-| -------------------- | --------------------- | -------------------------------------------------------------------- |
-| Script (recommended) | `sdkvm upgrade`       | Replaces `$SDKVM_HOME/cli` only. The runtime and installed SDKs stay |
-| npm and friends      | `npm update -g sdkvm` | CLI only. pnpm / yarn / bun use their own global update command      |
+| Install method | Command | What changes |
+| --- | --- | --- |
+| Script (recommended) | `sdkvm upgrade` | Replaces `$SDKVM_HOME/cli` only; the runtime and installed SDKs stay |
+| npm and friends | `npm update -g sdkvm` | CLI only; pnpm / yarn / bun use their own global update commands |
 
-The data directory is independent of a CLI upgrade. A script install can also be refreshed by running the install script again.
+The data directory is independent of the CLI version. A script install can also
+be refreshed by re-running the install script at any time.
 
 ## Quick start
 
-Java accepts bare commands (same as `sdkvm java`). Go, Flutter, Node, Maven, Miniconda, and Python use subcommands.
+Java accepts bare commands (`sdkvm install` equals `sdkvm java install`) or the
+subcommand form; Go, Flutter, Node.js, Maven, Miniconda, and Python use the
+`sdkvm <type>` subcommand groups.
 
 ```sh
-# Optional: faster downloads in China (scoped per SDK type)
-sdkvm mirror use nju          # Java Temurin
+# Optional: faster downloads (scoped per SDK type, independently)
+sdkvm mirror use nju              # Java (Temurin)
 sdkvm go mirror use nju
 sdkvm flutter mirror use nju
 sdkvm node mirror use nju
 sdkvm maven mirror use aliyun
-sdkvm miniconda mirror use tuna   # where sdkvm downloads Miniconda; not conda channels
-sdkvm nrm use taobao          # npm install only; independent of mirror above
-sdkvm mrm use aliyun          # mvn dependency downloads only; writes settings.xml
+sdkvm miniconda mirror use tuna   # only where sdkvm downloads Miniconda itself
+sdkvm nrm use taobao              # only where npm install fetches packages
+sdkvm mrm use aliyun              # only where mvn fetches dependencies (settings.xml)
 
 # Java
 sdkvm install lts
@@ -175,12 +240,12 @@ sdkvm node install lts
 sdkvm node use 24
 node --version
 
-# Maven (needs JAVA_HOME)
+# Maven (needs JAVA_HOME; run sdkvm java use first)
 sdkvm maven install 3.9
 sdkvm maven use 3.9
 mvn -version
 
-# Miniconda (the installer is about 150 MB)
+# Miniconda (installer is about 150 MB)
 sdkvm miniconda install 26.7
 sdkvm miniconda use 26.7
 conda --version
@@ -199,45 +264,34 @@ sdkvm go ls
 sdkvm uninstall zulu-21
 ```
 
-After the first `use`, **open a new terminal**, or on macOS / Linux run `source ~/.zshrc` (or the matching bash rc). Restart the IDE so it picks up the new environment variables.
+After the first `use`, **open a new terminal**, or on macOS / Linux run
+`source ~/.zshrc` (or the matching bash rc). Restart the IDE so it picks up the
+new environment variables.
 
-Day-to-day: `install` → `use` → `current` / `ls`. Install mirrors, the npm registry, and Maven dependency mirrors: [Mirrors and npm registry](#mirrors-and-npm-registry).
+The daily workflow is three commands: `install` → `use` → `current` / `ls`.
 
-## Commands
+## Command reference
 
-Java accepts bare commands (`sdkvm install`) or `sdkvm java`. Go, Flutter, Node.js, Maven, Miniconda, and Python use `sdkvm go`, `sdkvm flutter`, `sdkvm node`, `sdkvm maven`, `sdkvm miniconda`, and `sdkvm python`.
+### Command groups
 
-### Cheat sheet
+| Group | Purpose |
+| --- | --- |
+| `sdkvm install / use / ls / current / uninstall / mirror` | Bare-command form for Java, fully equivalent to `sdkvm java …` |
+| `sdkvm java …` | Java subcommand group (equivalent to the bare commands) |
+| `sdkvm go / flutter / node / maven / miniconda / python …` | The same subcommand group for each SDK |
+| `sdkvm nrm …` | npm registry manager |
+| `sdkvm mrm …` | Maven dependency-mirror manager |
+| `sdkvm version` / `sdkvm upgrade` | CLI metadata and self-upgrade |
 
-| Command                                           | Effect                                                                                   |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `sdkvm install <version>`                         | Install Java (same as `sdkvm java install`)                                              |
-| `sdkvm use <version>`                             | Switch the current Java                                                                  |
-| `sdkvm ls` / `sdkvm ls -r`                        | List installed versions / installable lines                                              |
-| `sdkvm current`                                   | Show the current version of every SDK                                                    |
-| `sdkvm uninstall <version>`                       | Remove one version                                                                       |
-| `sdkvm mirror ls\|use\|current\|show\|set\|unset` | Manage SDK download mirror sites / URLs (install archives, not the npm package registry) |
-| `sdkvm nrm ls\|use\|current\|add\|del\|test`      | Manage the user-level npm registry (like nrm)                                            |
-| `sdkvm mrm ls\|use\|current\|add\|del\|test\|settings` | Manage Maven dependency mirrors (`settings.xml`, like nrm)                         |
-| `sdkvm java\|go\|flutter\|node\|maven\|miniconda\|python …` | Full command group for that SDK                                                          |
-| `sdkvm version`                                   | Print the CLI version (same as `sdkvm --version`)                                        |
-| `sdkvm upgrade`                                   | Upgrade the CLI. See [Upgrade](#upgrade)                                                 |
-
-Version forms:
-
-```sh
-sdkvm java    install lts | 21 | 21.0.5 | 21.0.5+11 | zulu-21
-sdkvm go      install latest | 1.24 | 1.24.5 | golang-1.24
-sdkvm flutter install latest | 3.47 | 3.47.5 | 3.49.0-0.1.pre | flutter-3.47
-sdkvm node    install lts | latest | 22 | 22.20.0 | nodejs-22.20.0
-sdkvm maven   install latest | 3 | 3.9 | 3.9.9 | 4.0.0-rc-4 | maven-3.9
-sdkvm miniconda install latest | 26 | 26.7 | 26.7.1-1 | py313 | py313_26.7.1-1
-sdkvm python install 3 | 3.12 | 3.12.7 | 3.14.0rc2 | latest
-```
+Every SDK group exposes the same six subcommands — `install`, `use`, `ls`
+(alias `list`), `current`, `uninstall`, and `mirror` — with the arguments
+documented below.
 
 ### `sdkvm install <version>`
 
-Resolve, download (SHA-256 is hashed while bytes arrive), verify, extract into a temp directory, then move into place.
+Resolves the version spec, downloads the archive (SHA-256 is computed while
+bytes arrive), verifies it, extracts into a temp directory, validates the
+layout, and moves it atomically into place.
 
 ```console
 $ sdkvm install 21
@@ -248,16 +302,30 @@ sdkvm installed Temurin 21.0.12.1 → ~/.sdkvm/jdks/temurin-21.0.12.1
 sdkvm switch to it: sdkvm use 21
 ```
 
-| Option          | Meaning                                                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| `--vendor <id>` | Java: `temurin` (default) / `zulu` / `corretto`. Go is `golang`, Flutter is `flutter`, Node.js is `nodejs`, Maven is `maven`, Miniconda is `miniconda`, Python is `cpython` |
-| `--force`       | Delete and reinstall. The default is to skip a version that is already present                             |
+| Option | Meaning |
+| --- | --- |
+| `--vendor <id>` | Pin the distribution. Java: `temurin` (default) / `zulu` / `corretto`; Go is `golang`, Flutter is `flutter`, Node.js is `nodejs`, Maven is `maven`, Miniconda is `miniconda`, Python is `cpython` |
+| `--force` | Delete and reinstall when already present; the default is to skip |
 
-A failed checksum or extract removes the partial directory and the cache. The download timer is 60 seconds without data, not a cap on total time.
+Behavior notes:
+
+- The switch hint printed after a successful install is the shortest spec that
+  selects that exact install; when a newer version of the same major is already
+  installed, the hint is automatically vendor-qualified (for example
+  `sdkvm use zulu-21.0.5+11`) so a bare `use 21` cannot be captured by another
+  vendor's newer build.
+- A failed checksum or a malformed extract removes the partial directory and
+  the cache entry.
+- The download timeout is 60 seconds without data (idle timeout), not a cap on
+  total time.
+- Archives containing escaping paths (zip-slip) or outward-pointing symlinks
+  are rejected.
 
 ### `sdkvm use <version>`
 
-Match an installed version, then update the `current-*` link and `JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` / `MAVEN_HOME` / `MINICONDA_HOME` / `PYTHON_HOME` / `PATH`.
+Matches an **installed** version, retargets the `current-*` link, and keeps the
+environment variables (`JAVA_HOME` / `GO_HOME` / `FLUTTER_HOME` / `NODE_HOME` /
+`MAVEN_HOME` / `MINICONDA_HOME` / `PYTHON_HOME`) and `PATH` in effect.
 
 ```sh
 sdkvm use 21
@@ -270,11 +338,27 @@ sdkvm miniconda use 26.7
 sdkvm python use 3.12
 ```
 
-On macOS / Linux the first `use` appends an init block to the shell rc. Open a new terminal or `source ~/.zshrc`. Later switches only move the link. IDEs need a restart before they see the new variables. Maven needs a JDK: if `JAVA_HOME` is unset, `use` tells you to run `sdkvm java use` first. See [Switching](#switching).
+| Option | Meaning |
+| --- | --- |
+| `--vendor <id>` | Restrict matching to one distribution |
+
+Matching rules:
+
+- A bare `use <major>` (for example `use 21`) selects the newest installed
+  version of that major **across all vendors**; use a `vendor-` prefix or
+  `--vendor` to pin a distribution.
+- Java exact versions match by prefix: `21.0.5` matches `21.0.5+11`, and the
+  reverse also holds (`use zulu-21.0.5+11` matches a `zulu-21.0.5` directory
+  whose name omits the build number).
+
+On macOS / Linux the first `use` appends a marked init block to the shell rc
+(see [Switching](#switching)); open a new terminal or `source` it. Later
+switches only retarget the link. IDEs need a restart. Maven requires a JDK: if
+`JAVA_HOME` is unset, `use` points you at `sdkvm java use`.
 
 ### `sdkvm ls`
 
-Installed versions. `→` marks the current one.
+Lists installed versions; `→` marks the current one. Alias `list`.
 
 ```console
 $ sdkvm go ls
@@ -282,7 +366,10 @@ $ sdkvm go ls
   golang-1.23.9
 ```
 
-`sdkvm ls -r` (`--remote`) fetches installable lines from every vendor of that SDK in parallel. The name at the start of a row can be passed to `install`. The default list is the latest 12 lines. Older versions are installed by exact name.
+| Option | Meaning |
+| --- | --- |
+| `-r, --remote` | Fetch installable version lines from every vendor of the type in parallel; the latest 12 lines are shown, older versions install by exact name |
+| `--vendor <id>` | Limit `--remote` output to one vendor |
 
 ```console
 $ sdkvm flutter ls -r
@@ -294,11 +381,14 @@ $ sdkvm flutter ls -r
 # install with: sdkvm flutter install <name>
 ```
 
-`--vendor <id>` limits the list to one vendor.
+In `-r` mode an individual vendor failure prints a warning and the rest
+continue; if every vendor fails, the command exits 1.
 
 ### `sdkvm current`
 
-SDKs that are not installed are omitted.
+Shows the current version and target of every enabled SDK. Types with nothing
+installed are omitted. The bare command shows Java; `sdkvm <type> current`
+shows that type.
 
 ```console
 $ sdkvm current
@@ -306,8 +396,6 @@ java: temurin-21.0.12.1
   JAVA_HOME → ~/.sdkvm/jdks/temurin-21.0.12.1
 go: golang-1.24.5
   GO_HOME → ~/.sdkvm/gos/golang-1.24.5
-flutter: flutter-3.47.5
-  FLUTTER_HOME → ~/.sdkvm/flutters/flutter-3.47.5
 node: nodejs-22.20.0
   NODE_HOME → ~/.sdkvm/nodes/nodejs-22.20.0
 maven: maven-3.9.9
@@ -320,30 +408,59 @@ python: cpython-3.12.7
 
 ### `sdkvm uninstall <version>`
 
-Same syntax as `use`. Uninstalling the current version clears that `current-*` link — on macOS/Linux the sdkvm block is removed from your rc file, on Windows the matching environment variables and user PATH entries are removed — then asks you to pick another. Other installed versions stay.
+Removes an installed version. Same syntax as `use`.
 
-### `sdkvm mirror`
+| Option | Meaning |
+| --- | --- |
+| `--vendor <id>` | Restrict matching to one distribution |
 
-Manages the **download mirror** for each SDK (not the npm package registry, and not conda channels). Java: `sdkvm mirror`. Others: `sdkvm go|flutter|node|maven|miniconda|python mirror`. Scopes do not overlap. `sdkvm miniconda mirror` only chooses where sdkvm downloads Miniconda itself. `sdkvm python mirror` only changes the CPython archive URL.
+- Removing a **non-current** version deletes only that directory; other
+  versions and the current link are untouched.
+- Removing the **current** version deletes the directory, then clears that
+  `current-*` link — on macOS / Linux the SDK's sdkvm block is removed from the
+  rc file, on Windows the matching environment variables and user PATH entries
+  are removed — and prompts you to pick another version.
+- An unknown version prints the installed versions and exits 1.
+
+### `sdkvm mirror [action] [nameOrVendor] [url]`
+
+Manages the **download mirror for SDK install archives** — not the npm package
+registry and not conda channels. Java uses the bare `sdkvm mirror`; other types
+use `sdkvm go|flutter|node|maven|miniconda|python mirror`. Scopes are independent.
 
 ```sh
 sdkvm mirror ls
 sdkvm mirror use nju
 sdkvm go mirror use aliyun
-sdkvm node mirror use official   # restore official source for that type
+sdkvm node mirror use official   # restore the official source for this type
 ```
 
-| Action                         | Meaning                                                                       |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| `ls` / `current` / `show`      | List sites and show the current config for this type                          |
-| `use <site>`                   | Switch to a built-in site (`nju` / `tuna` / `aliyun` / `huawei` / `official`) |
-| `set [vendor] <url>` / `unset` | Set or clear a raw URL                                                        |
+| Action | Meaning |
+| --- | --- |
+| `ls` | List available sites and the current selection for this type |
+| `current` / `show` | Print the effective mirror configuration |
+| `use <site>` | Switch to a built-in site (`nju` / `tuna` / `aliyun` / `huawei` / `ustc` / `official`; aliases `tsinghua`→`tuna`, `ali`→`aliyun`); writes only the vendors of the current type |
+| `set [vendor] <url>` | Set a raw mirror root URL |
+| `unset` | Clear the manual configuration for this type |
 
-Coverage and hand-entered URLs: [Mirrors and npm registry](#mirrors-and-npm-registry).
+See [Mirrors and registries](#mirrors-and-registries) for the coverage matrix
+and raw-URL examples.
 
-### `sdkvm nrm`
+### `sdkvm nrm <command>`
 
-Manages the user-level **npm registry** (where `npm install` fetches packages). The UX follows [nrm](https://github.com/Pana/nrm). Independent of `mirror`.
+Manages the user-level **npm registry** (where `npm install` fetches packages).
+The UX follows [nrm](https://github.com/Pana/nrm). Fully independent of
+`mirror`. Requires `npm` on `PATH` (on Windows it invokes npm's own
+`npm-cli.js` without a shell).
+
+| Subcommand | Meaning |
+| --- | --- |
+| `ls` / `list` | List registries; `*` marks the current one |
+| `current` | Print the current registry |
+| `use <name>` | Switch the user-level registry |
+| `add <name> <url>` | Add a custom registry |
+| `del <name>` (alias `delete`) | Delete a custom registry |
+| `test [name]` | Ping registries and print latency |
 
 ```sh
 sdkvm nrm ls
@@ -354,11 +471,26 @@ sdkvm nrm del myprivate
 sdkvm nrm test
 ```
 
-Built-in names: `npm`, `yarn`, `taobao` (alias `npmmirror`), `tencent`, `cnpm`, `huawei`, `npmMirror`. `npm` must be on `PATH`.
+Built-in names: `npm`, `yarn`, `taobao` (alias `npmmirror`), `tencent`, `cnpm`,
+`huawei`, `npmMirror`.
 
-### `sdkvm mrm`
+### `sdkvm mrm <command>`
 
-Manages mirrors for Maven **dependencies and plugins** by writing a `<mirror>` into `settings.xml`. The UX follows `sdkvm nrm`. It does not invoke `mvn`, store credentials, or change `MAVEN_HOME`. Independent of `sdkvm maven mirror`, which only changes the Maven **install archive** URL.
+Manages mirrors for Maven **dependencies and plugins** by writing a marked
+`<mirror>` block into `settings.xml`. The UX follows `sdkvm nrm`. It never
+invokes `mvn`, stores no credentials, and does not touch `MAVEN_HOME`.
+Independent of `sdkvm maven mirror`, which only changes the Maven **install
+archive** URL.
+
+| Subcommand | Meaning |
+| --- | --- |
+| `ls` / `list` | List repository mirrors; `*` marks the current one |
+| `current` | Print the current mirror and the settings path |
+| `use <name>` | Switch the mirror (writes the marker block) |
+| `add <name> <url>` | Add a custom repository mirror |
+| `del <name>` (alias `delete`) | Delete a custom repository mirror |
+| `test [name]` | GET a known POM from each repository and print latency |
+| `settings [path\|unset]` | Show, set, or clear the settings.xml path |
 
 ```sh
 sdkvm mrm ls
@@ -373,69 +505,142 @@ sdkvm mrm settings unset
 sdkvm mrm --settings /tmp/settings.xml use aliyun
 ```
 
-Built-in names: `official` (remove the sdkvm marker block and keep your other mirrors), `aliyun` (alias `ali`, the aggregate repo `repository/public`), `huawei`, `tencent`. Only the `<!-- >>> sdkvm mrm >>> -->` block is edited (`id=sdkvm`, `mirrorOf=*`). Path precedence: `--settings` > `SDKVM_M2_SETTINGS` > `config.mavenSettings` > `~/.m2/settings.xml`. The first two are not saved. When the path is not Maven's default, `use` prints `mvn -s <path>`.
+Built-in names: `official` (removes the sdkvm marker block and keeps your other
+mirrors), `aliyun` (alias `ali`, the aggregate repo `repository/public`),
+`huawei`, `tencent`.
 
-## Version syntax
+Behavior notes:
 
-`install`, `use`, and `uninstall` share this table. Combinations that are not listed are rejected with a rewrite hint.
+- Only the region between `<!-- >>> sdkvm mrm >>> -->` and
+  `<!-- <<< sdkvm mrm <<< -->` is edited (`id=sdkvm`, `mirrorOf=*`); other
+  mirrors, servers, and profiles stay untouched, and `use official` deletes
+  only that block.
+- settings.xml path precedence: the `--settings` flag > the `SDKVM_M2_SETTINGS`
+  environment variable > `config.mavenSettings` > `~/.m2/settings.xml`. The
+  first two are not saved.
+- When the path is not Maven's default, `use` prints the required `mvn -s <path>`.
+- Writes go through a temp file with atomic rename and share sdkvm's file lock.
+- Unpaired marker comments (manual-edit leftovers) abort the command with a
+  repair hint.
 
-| Form             | Java                       | Go                              | Flutter                                | Node.js                                | Maven                         | Miniconda                    | Python                               | Example                                                       |
-| ---------------- | -------------------------- | ------------------------------- | -------------------------------------- | -------------------------------------- | ----------------------------- | --------------------------- | ------------------------------------ | ------------------------------------------------------------- |
-| `<major>`        | Latest patch of that major | —                               | —                                      | Latest of that major                   | Latest stable of that major   | Newest of that major       | Newest stable of that major         | `21`, `22`, `3`, `26`                                         |
-| `<major.minor>`  | —                          | Latest patch of that minor line | Latest stable patch of that minor line | —                                      | Latest stable of that minor   | Newest of that minor line  | Newest stable of that minor line    | `1.24`, `3.47`, `3.9`, `3.12`, `26.7`                         |
-| `lts`            | Latest LTS major           | —                               | —                                      | Latest LTS line (currently 24 Krypton) | —                             | —                           | —                                    | `lts`                                                         |
-| `latest`         | —                          | Newest stable                   | Newest stable, not beta                | Newest Current                         | Newest stable, not prerelease | Newest installer for this OS | Newest stable, not a prerelease    | `latest`                                                      |
-| `<full-version>` | Exact or prefix            | Exact                           | Exact, including a prerelease          | Exact                                  | Exact, including a prerelease | Build or Python tag         | Exact, including a prerelease        | `21.0.5+11`, `1.24.5`, `22.20.0`, `3.12.7`, `py313_26.7.1-1`  |
-| `<vendor>-…`     | Pin a distribution         | Same                            | Same                                   | Same                                   | Same                          | Same                        | Same                                 | `zulu-21`, `maven-3.9.9`, `cpython-3.12.7`                    |
+### `sdkvm version` and `sdkvm upgrade`
 
-Rules:
+```console
+$ sdkvm version
+1.0.5
+```
 
-- `21`, `1.24`, `3.47`, `22`, `3`, `3.9`, and `3.12` select the newest installed or installable patch on that line.
-- Java `21.0.5` is a prefix and can match `21.0.5+11`. Go, Flutter, Node.js, Maven, and Python exact versions match the full string.
-- Flutter `latest` and `3.47` resolve on stable only. A beta needs the full prerelease, for example `3.49.0-0.1.pre`.
-- Maven lists stable `x.y.z` releases from 3.0 upward. `latest`, `3`, and `3.9` skip prereleases; install `4.0.0-rc-4` with the full string. Maven has no `lts` alias.
-- Java `lts` follows the Adoptium list: 8 / 11 / 17 / 21 / 25. Node.js `lts` is the newest `index.json` entry that carries an LTS codename.
-- Node.js rejects a two-part version such as `22.20`. Use `22` or `22.20.0`.
-- Java accepts the legacy major form: `1.8` is `8`. Update-style input such as `1.8.0_392` is not supported — use `8` (latest) or `8.0.392+b06` (an exact build).
-- Miniconda versions look like `py313_26.7.1-1`. `26` is the newest of that major. `26.7` is the newest of that minor line. `26.7.1-1` is the highest Python for that build. `py313` is the newest installer for that Python. `py313_26.7.1-1` pins both. There is no `lts` alias. The `latest` filename alias is ignored.
-- Python versions look like `3.12.7`. `3`, `3.12`, and `latest` stay on stable releases; a prerelease such as `3.14.0rc2` must be written in full. There is no `lts` alias. The build date `+20260924` is not part of the directory name. This is CPython and does not change conda channels. When both Python and Miniconda have been `use`d, the rc block written later is earlier on `PATH`.
-- Omitting the vendor uses the default distribution. Only Java's default is configurable. See [Config file](#config-file).
+`sdkvm upgrade` (no arguments): for a script install it downloads the new
+release and atomically replaces `$SDKVM_HOME/cli`; for an npm-family install it
+prints the matching package-manager update command. Installed SDKs and
+configuration are untouched. The upgrade holds the file lock.
+
+## Version specification
+
+`install`, `use`, and `uninstall` share one version-spec grammar. Forms that
+are not listed are rejected with a rewrite suggestion.
+
+### Master table
+
+| Form | Java | Go | Flutter | Node.js | Maven | Miniconda | Python | Example |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `<major>` | Latest patch of that major | — | — | Latest of that major | Latest stable of that major | Newest of that major | Newest stable of that major | `21`, `22`, `3`, `26` |
+| `<major.minor>` | — | Latest patch of that minor line | Latest stable patch of that minor line | — | Latest stable of that minor | Newest of that minor line | Newest stable of that minor line | `1.24`, `3.47`, `3.9`, `3.12`, `26.7` |
+| `lts` | Latest LTS major | — | — | Latest LTS line (currently 24 Krypton) | — | — | — | `lts` |
+| `latest` | — | Newest stable | Newest stable, not beta | Newest Current | Newest stable, not prerelease | Newest installer for this OS | Newest stable, not prerelease | `latest` |
+| `<full-version>` | Exact or prefix | Exact | Exact, including a prerelease | Exact | Exact, including a prerelease | Build or Python tag | Exact, including a prerelease | `21.0.5+11`, `1.24.5`, `22.20.0`, `3.12.7`, `py313_26.7.1-1` |
+| `<vendor>-…` | Pin a distribution | Same | Same | Same | Same | Same | Same | `zulu-21`, `maven-3.9.9`, `cpython-3.12.7` |
+
+### Per-SDK rules
+
+- **Java**: `lts` follows the Adoptium list, currently 8 / 11 / 17 / 21 / 25.
+  `21.0.5` is a prefix and matches `21.0.5+11`. The legacy major form `1.8`
+  equals `8`; update-style input such as `1.8.0_392` is not supported — use `8`
+  (latest) or `8.0.392+b06` (an exact build). An exact Temurin JDK 8 version
+  must carry a build number (for example `8.0.504+6`); otherwise sdkvm suggests
+  `install 8` or `ls -r`. Zulu keeps the build number in its version metadata
+  rather than the directory name; exact matching bridges that difference.
+- **Go**: `latest` resolves to the newest stable release; exact versions match
+  the full string.
+- **Flutter**: `latest` and `<major.minor>` resolve on the stable channel only;
+  a beta needs the full prerelease, for example `3.49.0-0.1.pre`.
+- **Node.js**: a two-part version such as `22.20` is rejected — use `22` or
+  `22.20.0`. `lts` is the newest `index.json` entry carrying an LTS codename.
+- **Maven**: only stable `x.y.z` releases from 3.0 upward are listed; `latest`,
+  `3`, and `3.9` skip prereleases — install `4.0.0-rc-4` with the full string.
+  There is no `lts` alias.
+- **Miniconda**: versions look like `py313_26.7.1-1`. `26` is the newest of
+  that major, `26.7` the newest of that minor line, `26.7.1-1` the highest
+  Python for that build, `py313` the newest installer for that Python, and
+  `py313_26.7.1-1` pins both. No `lts` alias; the `latest` filename alias is
+  ignored.
+- **Python**: versions look like `3.12.7`. `3`, `3.12`, and `latest` stay on
+  stable releases; a prerelease such as `3.14.0rc2` must be written in full.
+  No `lts` alias. The build date `+20260924` is not part of the directory name.
+  This is the CPython distribution and does not change conda channels. When
+  both Python and Miniconda are in use, the rc block written later comes first
+  on `PATH`.
+
+### Vendor prefix
+
+Omitting the vendor prefix uses the default distribution. Only Java's default
+is configurable (`config.defaultVendor`, default `temurin`). See
+[Config file](#config-file).
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success (warnings that do not affect the result are permitted) |
+| `1` | Operational error: unresolvable version, checksum failure, network unreachable, lock conflict, corrupt configuration, and so on; the message carries a next-step hint. `ls -r` also exits `1` when every vendor fetch fails |
 
 ## How it works
 
-### Layout
+### Directory layout
 
-The data root is `~/.sdkvm` (`%USERPROFILE%\.sdkvm` on Windows). `SDKVM_HOME` overrides it.
+The data root defaults to `~/.sdkvm` (`%USERPROFILE%\.sdkvm` on Windows);
+`SDKVM_HOME` overrides it. Installs, links, configuration, and caches all live
+inside it.
 
 ```
 ~/.sdkvm/
-├── jdks/            # Java: temurin-21.0.12.1
-├── gos/             # Go: golang-1.24.5
-├── flutters/        # Flutter: flutter-3.47.5
-├── nodes/           # Node.js: nodejs-22.20.0
-├── mavens/          # Maven: maven-3.9.9
+├── jdks/             # Java: temurin-21.0.12.1
+├── gos/              # Go: golang-1.24.5
+├── flutters/         # Flutter: flutter-3.47.5
+├── nodes/            # Node.js: nodejs-22.20.0
+├── mavens/           # Maven: maven-3.9.9
 ├── minicondas/       # Miniconda: miniconda-py313_26.7.1-1
 ├── pythons/          # Python: cpython-3.12.7
-├── current-java     # JAVA_HOME link (junction on Windows)
+├── current-java      # JAVA_HOME target (junction on Windows)
 ├── current-go
 ├── current-flutter
 ├── current-node
 ├── current-maven
 ├── current-miniconda
 ├── current-python
-├── runtime/         # Script-install Node, isolated from current-node
-├── cli/             # Script-install CLI package
-├── bin/             # Script-install entrypoint sdkvm (add to PATH)
-├── config.json
-├── cache/           # Download staging, removed after a successful install
-└── tmp/             # Extract staging, also removed
+├── runtime/          # script-install runtime, isolated from current-node
+├── cli/              # script-install CLI package
+├── bin/              # script-install entrypoint (must be on PATH)
+├── config.json       # user configuration
+├── .lock             # exclusive file lock
+├── cache/            # download staging, cleared after installs
+└── tmp/              # extract staging, also cleared
 ```
 
-Unpacked size, roughly: Java 300 MB, Go 250 MB, Node.js 100 MB (bundled npm included), Maven about 10 MB, Python archives about 20–40 MB, Miniconda installers about 150 MB, Flutter several GB (the archive itself is about 1–2.2 GB).
+Unpacked sizes, roughly: Java 300 MB, Go 250 MB, Node.js 100 MB (bundled npm
+included), Maven about 10 MB, Python archives about 20–40 MB, Miniconda
+installers about 150 MB, Flutter several GB (the archive is about 1–2.2 GB).
 
 ### Switching
 
-On macOS / Linux, each `current-*` entry is a symlink to the selected version. The first `use` appends a marked block: zsh writes `~/.zshrc`, bash writes `~/.bash_profile` or `~/.bashrc`. Each of the seven SDKs has its own block. The Miniconda block also sources `conda.sh`, so `conda activate` works. After both Python and Miniconda have been switched, the block written later is earlier on `PATH`.
+**macOS / Linux**: each `current-*` entry is a symlink to the selected
+version. The first `use` appends a marked init block to the shell rc: zsh
+writes `~/.zshrc`; bash writes `~/.bash_profile` (macOS) or `~/.bashrc`
+(elsewhere). Each of the seven SDKs has its own block; the existing file
+encoding is checked before writing, and non-standard UTF-8 content is backed
+up first. The Miniconda block also sources `conda.sh` so `conda activate`
+works. After both Python and Miniconda are switched, the block written later
+comes first on `PATH`.
 
 ```sh
 # >>> sdkvm java init >>>
@@ -477,15 +682,65 @@ case ":$PATH:" in *":$PYTHON_HOME/bin:"*) ;; *) export PATH="$PYTHON_HOME/bin:$P
 # <<< sdkvm python init <<<
 ```
 
-The variables point at the link. Later `use` calls only retarget that link, and a new terminal reads the new value.
+The variables point at the link rather than a concrete directory, so later
+`use` calls only retarget it and new terminals read the new value without any
+further rc edits.
 
-On Windows the seven `current-*` entries are junctions. `use` writes user environment variables as `REG_EXPAND_SZ` and keeps `%VAR%` references, which avoids the 1024-character `setx` truncation. PATH gains `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, and `%MAVEN_HOME%\bin`. The Windows Node.js archive has no `bin/` directory, so its PATH entry is `%NODE_HOME%` itself. Miniconda adds `%MINICONDA_HOME%`, `%MINICONDA_HOME%\Scripts`, and `%MINICONDA_HOME%\Library\bin`. Python adds `%PYTHON_HOME%` (`python.exe`) and `%PYTHON_HOME%\Scripts` (`pip.exe`). Open a new terminal or restart the IDE. `conda activate` in PowerShell is not covered.
+**Windows**: the seven `current-*` entries are junctions. `use` writes user
+environment variables as `REG_EXPAND_SZ`, keeping `%VAR%` references and
+avoiding the 1024-character `setx` truncation. PATH gains `%JAVA_HOME%\bin`,
+`%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, and `%MAVEN_HOME%\bin`; the Windows
+Node.js archive has no `bin/`, so its PATH entry is `%NODE_HOME%` itself;
+Miniconda adds `%MINICONDA_HOME%`, `%MINICONDA_HOME%\Scripts`, and
+`%MINICONDA_HOME%\Library\bin`; Python adds `%PYTHON_HOME%` (`python.exe`) and
+`%PYTHON_HOME%\Scripts` (`pip.exe`). A `WM_SETTINGCHANGE` broadcast follows;
+open terminals and IDEs still need a restart. `conda activate` inside
+PowerShell is out of scope.
+
+### Concurrency and the file lock
+
+Installs, switches, removals, `upgrade`, and `mrm use` hold the exclusive
+`~/.sdkvm/.lock`:
+
+- While an operation holds the lock, a new one fails immediately with a hint
+  (`Another sdkvm operation is in progress`) that includes how to clear the
+  lock manually.
+- The lock file records the holder PID and a heartbeat timestamp refreshed
+  while the lock is held. A dead holder, or a heartbeat more than 5 minutes
+  stale, lets the next waiter take over safely.
+- On a false positive (no other sdkvm process running), delete
+  `~/.sdkvm/.lock` as the error message suggests.
+
+### Downloads and integrity
+
+- Download URLs are resolved from official APIs or official directory listings
+  (Adoptium, Azul Metadata, Corretto, go.dev/dl, Flutter releases,
+  nodejs.org/dist `index.json`, Maven Central `maven-metadata.xml`). Search
+  pages are never scraped.
+- SHA-256 is computed while the archive streams in and compared against the
+  checksum source: Go, Flutter, Node.js (official `SHASUMS256.txt`), Miniconda,
+  and Python abort on mismatch; Maven checks the official `.sha512` (falling
+  back to the published `.sha1` for 3.8 and older); Java vendors verify
+  whenever a checksum is available.
+- **Strict verification** applies to mirrored downloads and to installers that
+  will be **executed** (Miniconda): if no verifiable hash can be obtained, the
+  install fails rather than proceeding.
+- When a checksum source is unreachable, the fallback order is the official
+  sidecar (for example Temurin `.json`, Maven `.sha512`) and then the same file
+  on the mirror; the install fails if both are unreachable or the hash differs.
+- The download idles out after 60 seconds without data (no total-time cap);
+  checksum requests retry automatically.
+- After extraction the tree must have a single root and the expected
+  executable; extraction always targets a fresh empty directory, and archive
+  entries (symlinks included) may not escape it. Any failure path clears the
+  partial files in `cache/` and `tmp/`.
 
 ## Configuration
 
 ### Config file
 
-Path: `~/.sdkvm/config.json`. A corrupt file is renamed to `config.json.bak` and replaced with defaults.
+Path: `~/.sdkvm/config.json`. A corrupt file is backed up as `config.json.bak`
+and replaced with defaults. All writes use a temp file plus atomic rename.
 
 ```json
 {
@@ -508,42 +763,43 @@ Path: `~/.sdkvm/config.json`. A corrupt file is renamed to `config.json.bak` and
 }
 ```
 
-| Field           | Meaning                                                  | Default     |
-| --------------- | -------------------------------------------------------- | ----------- |
-| `version`       | Schema version                                           | `1`         |
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `version` | Config schema version | `1` |
 | `defaultVendor` | Java distribution used when the vendor prefix is omitted | `"temurin"` |
-| `mirror`        | Vendor id to mirror root URL. Ids are unique across SDKs | `{}`        |
-| `npmRegistries` | Custom npm registries from `sdkvm nrm add`               | `{}`        |
-| `mavenRegistries` | Custom Maven repositories from `sdkvm mrm add`         | `{}`        |
-| `mavenSettings` | Absolute `settings.xml` path; empty uses the default    | `""`        |
+| `mirror` | Vendor id to mirror root URL; vendor ids are unique across SDKs | `{}` |
+| `npmRegistries` | Custom npm registries from `sdkvm nrm add` | `{}` |
+| `mavenRegistries` | Custom Maven repositories from `sdkvm mrm add` | `{}` |
+| `mavenSettings` | Absolute `settings.xml` path; empty uses the default location | `""` |
 
 ### Environment variables
 
-| Variable             | Meaning                                                            |
-| -------------------- | ------------------------------------------------------------------ |
-| `SDKVM_HOME`         | Data root. Default `~/.sdkvm`                                      |
-| `SDKVM_MIRROR`       | One-shot mirror. Wins over the config file and is not saved        |
-| `SDKVM_M2_SETTINGS`  | `settings.xml` for this `sdkvm mrm` run; not saved                 |
-| `SDKVM_QUIET`        | Non-empty suppresses info and warn logs                            |
-| `SDKVM_NODE_DIST`    | Node distribution root used by the install script                  |
+| Variable | Meaning |
+| --- | --- |
+| `SDKVM_HOME` | Data root; default `~/.sdkvm` |
+| `SDKVM_MIRROR` | One-shot mirror; wins over the config file and is not saved |
+| `SDKVM_M2_SETTINGS` | `settings.xml` for this `sdkvm mrm` run; not saved |
+| `SDKVM_QUIET` | When non-empty, suppresses info and warn logs |
+| `SDKVM_NODE_DIST` | Node distribution root used by the install script |
 | `SDKVM_RELEASE_BASE` | GitHub Release root used by the install script and `sdkvm upgrade` |
-| `SDKVM_RUNTIME_NODE` | Node version bundled by the install script. Default `22.20.0`      |
+| `SDKVM_RUNTIME_NODE` | Node version bundled by the install script; default `22.20.0` |
 
-Mirror precedence: `SDKVM_MIRROR` > `config.mirror[<vendor>]` > official source. See [Mirrors and npm registry](#mirrors-and-npm-registry).
+Mirror precedence: `SDKVM_MIRROR` > `config.mirror[<vendor>]` > official source.
 
-## Mirrors and npm registry
+## Mirrors and registries
 
-Three independent features:
+Three independent features with different targets — do not conflate them:
 
-|         | `sdkvm mirror`                                              | `sdkvm nrm`              | `sdkvm mrm`                                      |
-| ------- | ----------------------------------------------------------- | ------------------------ | ------------------------------------------------ |
-| Changes | Where sdkvm downloads JDK / Go / Flutter / Node / Maven / Miniconda / Python | **npm package** registry | Maven **dependency / plugin** repositories       |
-| Affects | `sdkvm … install`                                           | `npm install`            | `mvn` dependency resolution (`settings.xml`)     |
-| Scope   | Per SDK type                                                | User-level global        | One `settings.xml`                               |
+| | `sdkvm mirror` | `sdkvm nrm` | `sdkvm mrm` |
+| --- | --- | --- | --- |
+| Changes | Where sdkvm downloads JDK / Go / Flutter / Node / Maven / Miniconda / Python archives | The **npm package** registry | Maven **dependency / plugin** repositories (`settings.xml`) |
+| Affects | `sdkvm … install` | `npm install` | `mvn` dependency resolution |
+| Scope | Per SDK type | User-level global | One `settings.xml` |
 
 ### SDK install mirrors
 
-Prefer a built-in site per type (`use` only writes vendors for the current type; aliases: `tsinghua`→`tuna`, `ali`→`aliyun`):
+Prefer a built-in site per type (`use` writes only the vendors of the current
+type):
 
 ```sh
 sdkvm mirror use nju
@@ -554,16 +810,29 @@ sdkvm maven mirror use aliyun
 sdkvm miniconda mirror use tuna
 ```
 
-`sdkvm miniconda mirror` only switches where sdkvm downloads Miniconda itself. It does not write `.condarc` and does not change `conda install` channels. Aliyun does not host that installer directory, so it is not listed. `sdkvm python mirror` replaces `github.com/astral-sh/python-build-standalone/releases/download` with the mirror root and keeps `/{tag}/{filename}`. `latest-release.json` and `SHA256SUMS` stay on the official host. No preset site has been verified for that layout.
+Coverage matrix (`✓` means the site mirrors that SDK):
 
-| Site       | Java (temurin)  | Go              | Flutter         | Node.js                             | Maven           | Miniconda        | Python           |
-| ---------- | --------------- | --------------- | --------------- | ----------------------------------- | --------------- | --------------- | ---------------- |
-| `nju`      | ✓               | ✓               | ✓               | ✓                                   | —               | ✓               | —                |
-| `tuna`     | ✓               | —               | ✓               | — (incomplete archives; not listed) | —               | ✓               | —                |
-| `aliyun`   | —               | ✓               | —               | ✓                                   | ✓               | —               | —                |
-| `huawei`   | —               | —               | —               | ✓                                   | ✓               | —               | —                |
-| `ustc`     | —               | —               | —               | —                                   | —               | ✓               | —                |
-| `official` | Clear this type | Clear this type | Clear this type | Clear this type                     | Clear this type | Clear this type | Clear this type |
+| Site | Java (temurin) | Go | Flutter | Node.js | Maven | Miniconda | Python |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `nju` | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
+| `tuna` | ✓ | — | ✓ | — (incomplete archives; not listed) | — | ✓ | — |
+| `aliyun` | — | ✓ | — | ✓ | ✓ | — | — |
+| `huawei` | — | — | — | ✓ | ✓ | — | — |
+| `ustc` | — | — | — | — | — | ✓ | — |
+| `official` | Clear this type | Clear this type | Clear this type | Clear this type | Clear this type | Clear this type | Clear this type |
+
+Rewrite strategy and verified sites per vendor:
+
+| Vendor | Notes |
+| --- | --- |
+| Temurin | Adoptium directory layout; verified against [NJU](https://mirrors.nju.edu.cn/adoptium) and [TUNA](https://mirrors.tuna.tsinghua.edu.cn/Adoptium) |
+| Go | File name appended to the root; e.g. `nju` / `aliyun` |
+| Flutter | Bucket-prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release). Do not use `storage.flutter-io.cn` (no release manifest) |
+| Node.js | Prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/nodejs-release). Do not use TUNA nodejs-release (missing archives) |
+| Maven | Central path-prefix replacement; verified against [Aliyun central](https://maven.aliyun.com/repository/central) and [Huawei maven](https://repo.huaweicloud.com/repository/maven) |
+| Miniconda | Installer-directory prefix replacement; verified against NJU / TUNA / USTC. Aliyun does not host that directory |
+| Python | GitHub `releases/download` prefix replacement keeping `/{tag}/{filename}`; the manifest and checksums stay official. No verified preset site yet — use `mirror set` |
+| Zulu, Corretto | Official CDN only; no mirror support yet |
 
 Raw URL or one-shot override:
 
@@ -573,18 +842,9 @@ sdkvm python mirror set cpython https://mirror.example/python-build-standalone
 SDKVM_MIRROR=https://golang.google.cn/dl sdkvm go install 1.24
 ```
 
-Precedence: `SDKVM_MIRROR` > `config.mirror[<vendor>]` > official. A mirror replaces the archive URL only; metadata and checksums prefer the official API. If that checksum URL is unreachable and the checksum is a sidecar of the archive (Maven `.sha512`, Temurin `.json`), install fetches the same sidecar from the mirror and still checks the hash. Maven 3.8 and older have no `.sha512`, so those releases are checked with the published `.sha1`. Install fails when both URLs are unreachable, or when the hash does not match.
-
-| Vendor         | Notes                                                                                                                                          |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Temurin        | Adoptium layout; verified against [NJU](https://mirrors.nju.edu.cn/adoptium) and [TUNA](https://mirrors.tuna.tsinghua.edu.cn/Adoptium)         |
-| Go             | File name appended to the root; e.g. `nju` / `aliyun`                                                                                          |
-| Flutter        | Bucket-prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release). Do not use `storage.flutter-io.cn` |
-| Node.js        | Prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/nodejs-release). Do not use TUNA nodejs-release                           |
-| Maven          | Central path prefix replacement; verified against [Aliyun central](https://maven.aliyun.com/repository/central) and [Huawei maven](https://repo.huaweicloud.com/repository/maven). Newer releases use `.sha512`; 3.8 and older use `.sha1` |
-| Miniconda      | Installer-directory prefix replacement; verified against NJU / TUNA / USTC. Only where sdkvm downloads Miniconda itself |
-| Python         | GitHub `releases/download` prefix replacement; keeps `/{tag}/{filename}`. The manifest is not mirrored. No verified preset site yet |
-| Zulu, Corretto | Official CDN only; no mirror support yet                                                                                                       |
+A mirror replaces the archive URL only; version metadata and checksums prefer
+the official API, with the fallback order described in
+[Downloads and integrity](#downloads-and-integrity).
 
 ### npm registry
 
@@ -596,35 +856,65 @@ sdkvm nrm test         # latency
 
 ### Maven dependency mirrors
 
-`sdkvm mrm` writes or removes a marker block in `settings.xml` (`mirrorOf=*`, `id=sdkvm`). `use official` deletes only that block; other mirrors, servers, and profiles stay. Aliyun here is the aggregate repo `repository/public`, not the install-archive repo `repository/central`.
+`sdkvm mrm` writes or removes a marker block in `settings.xml` (`mirrorOf=*`,
+`id=sdkvm`). `use official` deletes only that block; other mirrors, servers,
+and profiles stay. Aliyun here is the aggregate repo `repository/public`, not
+the install-archive repo `repository/central`.
 
 ```sh
 sdkvm mrm use aliyun    # dependencies via Aliyun public
 sdkvm mrm use official  # remove the sdkvm mirror block
 sdkvm mrm settings ~/work/settings.xml
-mvn -s ~/work/settings.xml compile   # pass -s yourself when the path is not the default
+mvn -s ~/work/settings.xml compile   # pass -s yourself for non-default paths
 ```
 
-## Security
+## Security model
 
-- URLs are resolved from official APIs: Adoptium, Azul Metadata, Corretto, go.dev/dl, Flutter releases, nodejs.org/dist `index.json`, and Maven Central `maven-metadata.xml`. Search pages are not scraped.
-- Archives are hashed with SHA-256 as they download. Go, Flutter, and Node.js (official `SHASUMS256.txt`) abort on mismatch. Maven checks the `.sha512` sidecar, or the published `.sha1` when Central has no `.sha512` (3.8 and older). If a checksum source is unreachable: an official download warns and continues; a mirrored download tries the official sidecar, then the same file on the mirror. Install fails when both are unreachable, or when the hash does not match.
-- After extract, the tree must have a single root and the expected executable. Extraction always targets a fresh empty directory.
-- Install and `sdkvm upgrade` hold `~/.sdkvm/.lock` so concurrent writers do not overwrite each other.
+- **Trusted origins.** Download URLs come from official APIs, never scraped
+  search pages, and no script returned by a mirror is ever executed; https
+  redirects may not downgrade to http.
+- **Transport integrity.** SHA-256 is streamed during download and compared
+  against official manifests before anything lands; mirrors and installers are
+  strictly verified — no hash, no install.
+- **Contained extraction.** Archives unpack only into a fresh empty directory,
+  must have a single root and the expected executable, and no entry (symlink
+  targets included) may escape it (zip-slip protection).
+- **Minimal writes.** Host changes are limited to marked rc blocks or
+  user-level environment variables; config and settings.xml are replaced
+  atomically; no credentials are stored (mrm repository URLs may not carry
+  usernames or passwords; nrm writes no tokens).
+- **Process mutual exclusion.** Write operations hold an exclusive file lock
+  so concurrent runs cannot overwrite each other.
+- **Execution boundary.** The Miniconda installer runs silently only after its
+  hash verifies; Windows registry and script operations go through controlled
+  argument construction, never concatenated shell strings.
 
-## FAQ
+## Troubleshooting
 
 ### The command is still the old version after `use`
 
-The rc block applies in a new terminal, or after `source ~/.zshrc`. Restart the IDE. `sdkvm current` shows whether the link already moved. On Windows the registry is updated, but an open terminal keeps the old values.
+The rc block applies in a new terminal or after `source ~/.zshrc`; restart the
+IDE. Check `sdkvm current` to see whether the link already moved. On Windows
+the registry is updated, but an open terminal keeps the old values.
+
+### `Another sdkvm operation is in progress`
+
+After confirming no other sdkvm process is running (including an interrupted
+download), remove `~/.sdkvm/.lock` as the message suggests. When the holder
+exits normally or its heartbeat goes more than 5 minutes stale, the lock is
+taken over automatically, so manual cleanup is rarely needed.
 
 ### `GOROOT` / `FLUTTER_ROOT` were renamed
 
-They are now `GO_HOME` and `FLUTTER_HOME` (aligned with `JAVA_HOME` / `NODE_HOME`). After upgrading the CLI, run `use` again for each enabled SDK, and remove leftover old variable names from the user environment (Windows registry / hand-edited rc lines).
+They are now `GO_HOME` and `FLUTTER_HOME` (aligned with `JAVA_HOME` /
+`NODE_HOME`). After upgrading the CLI, run `use` again for each enabled SDK and
+remove leftover old variable names from the user environment (Windows registry
+/ hand-edited rc lines).
 
 ### fish or nushell
 
-Automatic rc writes support zsh and bash. Translate the blocks in [Switching](#switching). fish example:
+Automatic rc writes support zsh and bash only. Translate the blocks in
+[Switching](#switching) yourself. fish example:
 
 ```fish
 set -gx JAVA_HOME $HOME/.sdkvm/current-java
@@ -635,60 +925,77 @@ set -gx MAVEN_HOME $HOME/.sdkvm/current-maven
 fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVEN_HOME/bin
 ```
 
-### Flutter downloads are slow or they stop
+### Flutter downloads are slow or stop
 
-Run `sdkvm flutter mirror use nju` (or `tuna`) first. The timeout is 60 seconds with no data, so a steady slow transfer continues. Re-run `install` after a real interruption. Nothing partial is left behind.
+Run `sdkvm flutter mirror use nju` (or `tuna`) first. The timeout is 60 seconds
+without data, so a steady slow transfer continues. Re-run `install` after a
+real interruption; nothing partial is left behind.
 
 ### Install a Flutter beta
 
-Pass the full prerelease, for example `sdkvm flutter install 3.49.0-0.1.pre`. `latest` and `3.47` resolve on stable only.
+Pass the full prerelease, for example `sdkvm flutter install 3.49.0-0.1.pre`.
+`latest` and `3.47` resolve on stable only.
 
 ### Does a managed Node break sdkvm itself?
 
-A script install launches the CLI with `~/.sdkvm/runtime`, so `sdkvm node use` does not affect it. An npm global install follows the `node` on `PATH`. A Node older than 18.15 can stop the CLI; `sdkvm node use 22` brings it back.
+A script install launches the CLI with `~/.sdkvm/runtime`, so `sdkvm node use`
+does not affect it. An npm global install follows the `node` on `PATH`; a Node
+older than 18.15 can stop the CLI — `sdkvm node use 22` brings it back.
 
-### What is the difference between `mirror`, `nrm`, and `mrm`?
+### Difference between `mirror`, `nrm`, and `mrm`
 
-See [Mirrors and npm registry](#mirrors-and-npm-registry): `mirror` is for SDK install archives, `nrm` is for npm packages, and `mrm` is for Maven dependency repositories (`settings.xml`).
+See [Mirrors and registries](#mirrors-and-registries): `mirror` is for SDK
+install archives, `nrm` for npm packages, and `mrm` for Maven dependency
+repositories (`settings.xml`).
 
 ### Proxies
 
-`HTTPS_PROXY` is not read. A transparent system proxy works.
+`HTTPS_PROXY` and related variables are not read; a transparent system proxy
+works.
 
-### Isolate data for CI or multiple users
+### Isolating data for CI or multiple users
 
-Set `SDKVM_HOME=/path/to/dir`. Installs, links, and config all follow that directory.
+Set `SDKVM_HOME=/path/to/dir`. Installs, links, and configuration all follow
+that directory, giving per-project or per-user isolation for free.
 
 ## Uninstall
 
-npm install:
+**npm install**:
 
 ```sh
 npm uninstall -g sdkvm
 ```
 
-pnpm, yarn, and bun use their own global uninstall command.
+pnpm, yarn, and bun use their own global uninstall commands.
 
-A script install removes the shim and the CLI runtime. Installed SDKs stay:
+**Script install**: remove the entrypoint and CLI first (installed SDKs are
+unaffected):
 
 ```sh
 rm -rf ~/.sdkvm/bin ~/.sdkvm/cli ~/.sdkvm/runtime
 ```
 
-On Windows, delete `%USERPROFILE%\.sdkvm\bin\sdkvm.cmd`, plus `%USERPROFILE%\.sdkvm\cli` and `%USERPROFILE%\.sdkvm\runtime`, and remove `%USERPROFILE%\.sdkvm\bin` from the user PATH.
+On Windows, delete `%USERPROFILE%\.sdkvm\bin\sdkvm.cmd`, `%USERPROFILE%\.sdkvm\cli`,
+and `%USERPROFILE%\.sdkvm\runtime`, and remove `%USERPROFILE%\.sdkvm\bin` from
+the user PATH.
 
-After you no longer need the installed JDKs, Go, Flutter, Node.js, Maven, Miniconda, and Python, remove the data directory:
+Once the installed SDKs are no longer needed, remove the data directory:
 
 ```sh
 rm -rf ~/.sdkvm
 ```
 
-Also delete these shell blocks:
+Also clean the sdkvm blocks from the shell configuration:
 
 - `# >>> sdkvm path >>>` … `# <<< sdkvm path <<<`
-- each SDK’s `>>> sdkvm java|go|flutter|node|maven|miniconda|python init >>>` … `<<< … <<<`
+- each SDK's `# >>> sdkvm java|go|flutter|node|maven|miniconda|python init >>>` … `# <<< … <<<`
 
-On Windows, remove `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`, `NODE_HOME`, `MAVEN_HOME`, `MINICONDA_HOME`, and `PYTHON_HOME` from the user environment, and remove `%JAVA_HOME%\bin`, `%GO_HOME%\bin`, `%FLUTTER_HOME%\bin`, `%NODE_HOME%`, `%MAVEN_HOME%\bin`, `%MINICONDA_HOME%`, `%MINICONDA_HOME%\Scripts`, `%MINICONDA_HOME%\Library\bin`, `%PYTHON_HOME%`, and `%PYTHON_HOME%\Scripts` from the user PATH.
+On Windows, additionally remove `JAVA_HOME`, `GO_HOME`, `FLUTTER_HOME`,
+`NODE_HOME`, `MAVEN_HOME`, `MINICONDA_HOME`, and `PYTHON_HOME` from the user
+environment, and remove `%JAVA_HOME%\bin`, `%GO_HOME%\bin`,
+`%FLUTTER_HOME%\bin`, `%NODE_HOME%`, `%MAVEN_HOME%\bin`, `%MINICONDA_HOME%`,
+`%MINICONDA_HOME%\Scripts`, `%MINICONDA_HOME%\Library\bin`, `%PYTHON_HOME%`,
+and `%PYTHON_HOME%\Scripts` from the user PATH.
 
 ## Development
 
@@ -700,22 +1007,28 @@ npm run typecheck
 npm run build
 ```
 
-`npm run build` runs tsup and writes `dist/index.js`. Try it with `node dist/index.js`.
+`npm run build` runs tsup and writes `dist/index.js`; try the CLI locally with
+`node dist/index.js`. CI runs type checks, unit tests, build and pack, plus a
+real install / switch / uninstall e2e flow on macOS, Ubuntu, and Windows.
 
 ```
 src/
-├── cli/       # install / use / ls / uninstall / mirror / nrm / upgrade
-├── core/      # version parsing, registry, config, file lock
-├── sdk/       # java / go / flutter / node / maven / miniconda / python: directories, env vars, version syntax
-├── vendor/    # temurin / zulu / corretto / golang / flutter / nodejs / maven / miniconda / cpython, plus mirror rewrite
-├── fs/        # extract, layout normalize, links
+├── cli/       # install / use / ls / uninstall / mirror / nrm / mrm / upgrade
+├── core/      # version parsing, registry, config, file lock, platform detect
+├── sdk/       # per-SDK directories, env vars, version syntax, binary paths
+├── vendor/    # per-distribution listing and resolution, mirror rewrites
+├── fs/        # extract, layout normalization, links
 ├── shell/     # rc writes, Windows registry
 ├── net/       # fetch, streaming download, checksums
 └── ui/        # logs and progress
 ```
 
-To add a language, implement `listMajors` and `resolve` under `src/vendor/`, add a type descriptor under `src/sdk/` (install directory, current link, environment variable, version syntax, binary path), and register it in `sdk/index.ts`. The install / use / ls / uninstall / mirror commands, plus rc and registry writes, follow from that registration.
+To add a language, implement `listMajors` and `resolve` under `src/vendor/`,
+add a type descriptor under `src/sdk/` (install directory, current link,
+environment variable, version syntax, binary path), and register it in
+`sdk/index.ts` — install / use / ls / uninstall / mirror and the rc and
+registry writes follow from that registration.
 
 ## License
 
-[MIT](./LICENSE) © qinlaoshi
+[MIT](./LICENSE) © sdkvm contributors
