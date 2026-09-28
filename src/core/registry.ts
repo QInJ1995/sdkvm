@@ -87,7 +87,8 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
     matched = candidates.filter((j) => {
       if (spec.matchesFull) return spec.matchesFull(j.version, v);
       const f = spec.formatVersion(j.version);
-      return f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`);
+      // 反向前缀：wanted 带 build 而已装目录不带（zulu 的 build 在 distro_version，不进目录名）
+      return f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`) || v.startsWith(`${f}+`);
     });
   }
 

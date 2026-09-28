@@ -165,15 +165,24 @@ describe('refinedUseHint', () => {
     expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21');
   });
 
-  it('该 major 已有更新的已装版本时退回完整版本号', () => {
+  it('该 major 已有更新的已装版本时退回带 vendor 的完整规格', () => {
     mkJdk('temurin-21.0.6+7');
-    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21.0.5+11');
+    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('temurin-21.0.5+11');
   });
 
-  it('忽略其它 vendor 与其它 major', () => {
+  it('跨 vendor 的更新已装版本同样让提示退回完整规格', () => {
     mkJdk('zulu-21.0.12.1');
+    expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('temurin-21.0.5+11');
+  });
+
+  it('其它 major 不影响提示', () => {
     mkJdk('temurin-17.0.13+11');
     expect(refinedUseHint('java', parseVersion('temurin', '21.0.5+11'), '21')).toBe('21');
+  });
+
+  it('wanted 带 build 而已装目录不带（zulu）时反向命中', () => {
+    mkJdk('zulu-21.0.5');
+    expect(findInstalled('java', 'zulu-21.0.5+11').dirPath.endsWith('zulu-21.0.5')).toBe(true);
   });
 
   it('非 java/node 类型原样返回', () => {

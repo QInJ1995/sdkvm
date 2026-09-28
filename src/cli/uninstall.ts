@@ -20,8 +20,13 @@ export async function uninstallCommand(
   const platform = detectPlatform();
   const installed = findInstalled(type, specInput, opts.vendor);
   await withLock(async () => {
+    // 先判 current 再删目录：删完之后 listInstalled 里已没有它，
+    // currentSdk 会把"当前版本"误判成"不是当前"，跳过链接与 rc 清理
+    // 先判 current 再删目录：删完之后 listInstalled 里已没有它，
+    // currentSdk 会把"当前版本"误判成"不是当前"，跳过链接与 rc 清理
+    const wasCurrent = currentSdk(type)?.dirPath === installed.dirPath;
     fs.rmSync(installed.dirPath, { recursive: true, force: true });
-    if (currentSdk(type)?.dirPath !== installed.dirPath) return;
+    if (!wasCurrent) return;
     // 卸载的是当前版本：清掉 current 链接与 rc / 注册表里的环境痕迹，避免悬空的 JAVA_HOME 等
     clearCurrent(type);
     if (platform.os === 'windows') {

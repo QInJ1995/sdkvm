@@ -76,6 +76,17 @@ export function assertContained(destDir: string, root: string): void {
     const resolved = path.resolve(p);
     return resolved === base || resolved.startsWith(base + path.sep);
   };
+  // 符号链接审计两侧都要 realpath：macOS 的 /tmp 是 /private/tmp 的链接，
+  // 未解析的 base 与已解析的 realpath 比较会把合法的包内相对链接误判成越界
+  const realBase = (() => {
+    try {
+      return fs.realpathSync(base);
+    } catch {
+      return base;
+    }
+  })();
+  const withinReal = (p: string): boolean =>
+    p === realBase || p.startsWith(realBase + path.sep);
   if (!within(root)) {
     throw new SdkvmError('Archive root lies outside the extraction directory', { hint: root });
   }
@@ -100,7 +111,7 @@ export function assertContained(destDir: string, root: string): void {
         } catch {
           real = null;
         }
-        if (!real || !within(real)) {
+        if (!real || !withinReal(real)) {
           throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
             hint: real ?? entryPath,
           });

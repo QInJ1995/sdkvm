@@ -100,3 +100,16 @@ describe('assertContained', () => {
     expect(() => assertContained(dir, dir)).toThrow(/symlink points outside/);
   });
 });
+
+describe('assertContained 符号链接前缀', () => {
+  it('接受位于符号链接目录下的解压根与包内相对链接（macOS /tmp 回归）', () => {
+    const real = path.join(work, 'real-extract');
+    const inner = path.join(real, 'bundle', 'Home');
+    fs.mkdirSync(inner, { recursive: true });
+    fs.writeFileSync(path.join(real, 'DISCLAIMER'), 'x');
+    fs.symlinkSync(path.join('..', '..', 'DISCLAIMER'), path.join(inner, 'DISCLAIMER'));
+    const viaLink = path.join(work, 'link-extract');
+    fs.symlinkSync(real, viaLink);
+    expect(() => assertContained(viaLink, path.join(viaLink, 'bundle', 'Home'))).not.toThrow();
+  });
+});

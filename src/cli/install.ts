@@ -46,13 +46,12 @@ export function installUseHint(type: SdkTypeId, version: SdkVersion): string {
 export function refinedUseHint(type: SdkTypeId, version: SdkVersion, hint: string): string {
   if (type !== 'java' && type !== 'node') return hint;
   const sdk = getSdkType(type);
+  // `use <major>` 不带 vendor 前缀：跨 vendor 取该 major 最新。任何更新的已装版本都会让提示切走，
+  // 此时给带 vendor 的完整规格才指得回刚装的这份
   const newerPeer = listInstalled(type).some(
-    (j) =>
-      j.version.vendor === version.vendor &&
-      j.version.major === version.major &&
-      sdk.compareVersions(j.version, version) > 0,
+    (j) => j.version.major === version.major && sdk.compareVersions(j.version, version) > 0,
   );
-  return newerPeer ? sdk.formatVersion(version) : hint;
+  return newerPeer ? `${version.vendor}-${sdk.formatVersion(version)}` : hint;
 }
 
 /** 安装已就位后清理备份失败不应让这次安装报失败 */
