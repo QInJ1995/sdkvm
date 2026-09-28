@@ -2,6 +2,9 @@
 # Usage: irm https://raw.githubusercontent.com/QInJ1995/sdkvm/main/install.ps1 | iex
 # Requires a published GitHub Release with sdkvm.tgz and SHA256SUMS.
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'   # PS 5.x 的 IWR 进度条会拖慢下载一个数量级
+# PS 5.1 默认协议可能不含 TLS 1.2（GitHub 下载需要）
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
 $RuntimeNode = if ($env:SDKVM_RUNTIME_NODE) { $env:SDKVM_RUNTIME_NODE } else { '22.20.0' }
 $NodeDist = if ($env:SDKVM_NODE_DIST) { $env:SDKVM_NODE_DIST.TrimEnd('/') } else { 'https://nodejs.org/dist' }
@@ -18,6 +21,10 @@ if ($procArch -eq 'ARM64') {
   $arch = 'x64'
 } else {
   throw "sdkvm: unsupported architecture $procArch"
+}
+
+if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+  throw 'sdkvm: tar is required to extract archives (bundled with Windows 10 1803+)'
 }
 
 $nodeName = "node-v$RuntimeNode-win-$arch"
@@ -49,16 +56,16 @@ function Remove-Junction([string]$path) {
 
 try {
   Write-Host "sdkvm: downloading Node.js $RuntimeNode (windows/$arch)"
-  Invoke-WebRequest -Uri "$NodeDist/v$RuntimeNode/$nodeArchive" -OutFile (Join-Path $tmpdir $nodeArchive)
-  Invoke-WebRequest -Uri "$NodeDist/v$RuntimeNode/SHASUMS256.txt" -OutFile (Join-Path $tmpdir 'SHASUMS256.txt')
+  Invoke-WebRequest -UseBasicParsing -Uri "$NodeDist/v$RuntimeNode/$nodeArchive" -OutFile (Join-Path $tmpdir $nodeArchive)
+  Invoke-WebRequest -UseBasicParsing -Uri "$NodeDist/v$RuntimeNode/SHASUMS256.txt" -OutFile (Join-Path $tmpdir 'SHASUMS256.txt')
   $expected = Get-ExpectedHash (Join-Path $tmpdir 'SHASUMS256.txt') $nodeArchive
   $actual = Get-FileSha256 (Join-Path $tmpdir $nodeArchive)
   if (-not $expected -or $expected -ne $actual) { throw 'sdkvm: Node.js checksum mismatch' }
 
   Write-Host 'sdkvm: downloading CLI'
   try {
-    Invoke-WebRequest -Uri "$ReleaseBase/latest/download/sdkvm.tgz" -OutFile (Join-Path $tmpdir 'sdkvm.tgz')
-    Invoke-WebRequest -Uri "$ReleaseBase/latest/download/SHA256SUMS" -OutFile (Join-Path $tmpdir 'SHA256SUMS')
+    Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/latest/download/sdkvm.tgz" -OutFile (Join-Path $tmpdir 'sdkvm.tgz')
+    Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/latest/download/SHA256SUMS" -OutFile (Join-Path $tmpdir 'SHA256SUMS')
   } catch {
     throw "sdkvm: download failed ($ReleaseBase/latest/download/sdkvm.tgz). Publish a GitHub Release (push a v* tag) with sdkvm.tgz, or install via: npm install -g sdkvm"
   }
@@ -98,10 +105,14 @@ try {
   if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
   if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
 
+  # shim 运行时用 %~dp0 推导根路径，不内嵌安装路径：非 ASCII 用户名不会被 ascii 编码损坏
   @"
 @echo off
-set "ROOT=%SDKVM_HOME%"
-if "%ROOT%"=="" set "ROOT=$Root"
+if defined SDKVM_HOME (
+  set "ROOT=%SDKVM_HOME%"
+) else (
+  for %%i in ("%~dp0..") do set "ROOT=%%~fi"
+)
 "%ROOT%\runtime\current\node.exe" "%ROOT%\cli\dist\index.js" %*
 "@ | Set-Content -Encoding ascii (Join-Path $BinDir 'sdkvm.cmd')
 
@@ -142,6 +153,12 @@ if "%ROOT%"=="" set "ROOT=$Root"
     Write-Host "sdkvm: added $pathEntry to user PATH (reopen the terminal)"
   }
   $k.Close()
+
+  # 广播 WM_SETTINGCHANGE，让已打开的 Explorer / 终端感知新的用户 PATH
+  $sig = '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+  $native = Add-Type -MemberDefinition $sig -Name 'NativeMethods' -Namespace 'sdkvm' -PassThru
+  $r = [UIntPtr]::Zero
+  $null = $native::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)
 } finally {
   Remove-Item -Recurse -Force $tmpdir -ErrorAction SilentlyContinue
 }

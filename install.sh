@@ -31,7 +31,7 @@ fetch() {
   url=$1
   dest=$2
   if command -v curl >/dev/null 2>&1; then
-    if ! curl -fsSL "$url" -o "$dest"; then
+    if ! curl -fsSL --retry 3 --connect-timeout 15 "$url" -o "$dest"; then
       echo "sdkvm: download failed: $url" >&2
       case "$url" in
         */releases/*/download/*)
@@ -41,7 +41,7 @@ fetch() {
       exit 1
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if ! wget -qO "$dest" "$url"; then
+    if ! wget -q --tries=3 --timeout=15 -O "$dest" "$url"; then
       echo "sdkvm: download failed: $url" >&2
       exit 1
     fi
@@ -98,6 +98,11 @@ fi
 mkdir -p "$ROOT/runtime" "$BIN_DIR"
 rm -rf "$ROOT/runtime/$node_name"
 tar -xzf "$tmpdir/$node_archive" -C "$ROOT/runtime"
+# current 若是真实目录（历史残留），ln -sfn 会把链接建到目录里面去，先拒绝
+if [ -d "$ROOT/runtime/current" ] && [ ! -L "$ROOT/runtime/current" ]; then
+  echo "sdkvm: $ROOT/runtime/current is a real directory, not a symlink; remove it and retry" >&2
+  exit 1
+fi
 ln -sfn "$node_name" "$ROOT/runtime/current"
 
 # 原子替换 CLI：先解压并校验，再 rename；失败时保留旧 cli

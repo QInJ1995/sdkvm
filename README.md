@@ -69,8 +69,8 @@
 - Linux 解压 Flutter（`.tar.xz`）需要 `xz`（`xz-utils`）。主流发行版默认自带。
 - Flutter 官方在 Linux / Windows 只发布 x64 归档。ARM Linux 与 ARM Windows 无法安装。macOS 两种架构都支持。
 - `flutter` 首次运行会构建内部 cache，耗时较久属于正常现象。
-- Miniconda 安装器约 150 MB，静默安装视为接受 [Miniconda 条款](https://www.anaconda.com/legal)。Windows 安装路径不能含空格（含空格时请把 `SDKVM_HOME` 指到无空格目录）。Windows 仅 x64；macOS 双架构，Linux x64 与 aarch64 都支持。较新的版本可能只发布其中一部分平台。
-- Python 使用 python-build-standalone 的 `install_only_stripped` 归档（没有则退回 `install_only`）。macOS、Linux、Windows 的 x64 与 aarch64 都支持。不安装 free-threaded、musl，也不选 `x86_64_v2` / `v3` / `v4`。只看最新一次构建快照里仍在发布的版本。
+- Miniconda 安装器约 150 MB，静默安装视为接受 [Miniconda 条款](https://www.anaconda.com/legal)。Windows 安装路径不能含空格（含空格时请把 `SDKVM_HOME` 指到无空格目录）。Windows 仅 x64；macOS 双架构，Linux x64 与 aarch64 都支持。较新的版本可能只发布其中一部分平台。安装器下载后必须带有可核对的 SHA-256 才会执行（无论是否走镜像）。
+- Python 使用 python-build-standalone 的 `install_only_stripped` 归档（没有则退回 `install_only`）。macOS、Linux、Windows 的 x64 与 aarch64 都支持。不安装 free-threaded、musl，也不选 `x86_64_v2` / `v3` / `v4`。列表只看最新一次构建快照；精确版本在最新快照里找不到时，会自动回退查最近几个历史 release 标签。
 
 ## 安装
 
@@ -320,7 +320,7 @@ python: cpython-3.12.7
 
 ### `sdkvm uninstall <version>`
 
-语法与 `use` 相同。卸载当前版本时会清掉对应的 `current-*` 链接，并提示另选版本。其他已安装版本保留。
+语法与 `use` 相同。卸载当前版本时会清掉对应的 `current-*` 链接：macOS/Linux 同时移除 rc 文件里的 sdkvm 标记块，Windows 同时清理对应环境变量与用户 PATH 条目；然后提示另选版本。其他已安装版本保留。
 
 ### `sdkvm mirror`
 
@@ -396,6 +396,7 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 - Maven 只收录 3.0 及以上的稳定版 `x.y.z`。`latest`、`3`、`3.9` 不含预发布；安装 `4.0.0-rc-4` 这类版本必须写完整串。Maven 没有 `lts`。
 - Java 的 `lts` 与 Adoptium 列表对齐，当前为 8 / 11 / 17 / 21 / 25。Node.js 的 `lts` 取官方 `index.json` 里最新带 LTS 代号的条目。
 - Node.js 不接受 `22.20` 这种两段式，应写成 `22` 或 `22.20.0`。
+- Java 接受旧式 major 写法：`1.8` 等价于 `8`。`1.8.0_392` 这类带更新号的写法不受支持，请改用 `8`（最新）或 `8.0.392+b06`（精确构建）。
 - Miniconda 版本如 `py313_26.7.1-1`。`26` 取该 major 最新，`26.7` 取该 minor 线最新，`26.7.1-1` 取该构建里最高的 Python，`py313` 取该 Python 的最新安装器，`py313_26.7.1-1` 精确到 Python 和构建。没有 `lts`。忽略文件名里的 `latest` 别名。
 - Python 版本如 `3.12.7`。`3`、`3.12`、`latest` 只取稳定版；`3.14.0rc2` 这类预发布必须写完整串。没有 `lts`。构建日期 `+20260924` 不进入目录名。这是 CPython，不改 conda 频道。Python 和 Miniconda 都 `use` 之后，shell 配置里后写入的块在 `PATH` 上靠前。
 - 省略厂商前缀时使用默认发行版。只有 Java 可以配置默认厂商，见[配置文件](#配置文件)。

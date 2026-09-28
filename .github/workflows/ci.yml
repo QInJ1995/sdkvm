@@ -111,6 +111,12 @@ jobs:
           $userPath=[string]$k.GetValue('Path','',$fmt)
           if ($userPath -notlike '*%NODE_HOME%*') { throw "user PATH missing %NODE_HOME%: $userPath" }
 
+      - name: nrm smoke (windows)
+        if: runner.os == 'Windows'
+        run: |
+          node dist/index.js nrm current
+          node dist/index.js nrm ls
+
       - name: install go 1.24
         if: runner.os != 'Windows'
         run: node dist/index.js go install 1.24

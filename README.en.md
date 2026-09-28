@@ -69,8 +69,8 @@ Platform limits:
 - Extracting Flutter (`.tar.xz`) on Linux needs `xz` (`xz-utils`). Mainstream distributions include it.
 - Official Flutter archives for Linux and Windows are x64 only. ARM Linux and ARM Windows cannot install Flutter. Both macOS architectures are supported.
 - The first `flutter` run builds an internal cache. That wait is expected.
-- Miniconda installers are about 150 MB. A silent install accepts the [Miniconda terms](https://www.anaconda.com/legal). The Windows install path cannot contain spaces; point `SDKVM_HOME` at a path without spaces. Windows is x64 only. macOS supports both architectures. Linux supports x64 and aarch64. A newer release may omit some of those platforms.
-- Python uses the python-build-standalone `install_only_stripped` archive, falling back to `install_only`. macOS, Linux, and Windows are supported on both x64 and aarch64. Free-threaded builds, musl, and `x86_64_v2` / `v3` / `v4` are not installed. Only versions still published in the latest build snapshot are listed.
+- Miniconda installers are about 150 MB. A silent install accepts the [Miniconda terms](https://www.anaconda.com/legal). The Windows install path cannot contain spaces; point `SDKVM_HOME` at a path without spaces. Windows is x64 only. macOS supports both architectures. Linux supports x64 and aarch64. A newer release may omit some of those platforms. An installer only runs after its SHA-256 checks out, mirrored or not.
+- Python uses the python-build-standalone `install_only_stripped` archive, falling back to `install_only`. macOS, Linux, and Windows are supported on both x64 and aarch64. Free-threaded builds, musl, and `x86_64_v2` / `v3` / `v4` are not installed. The list only reflects the latest build snapshot; an exact version missing there is looked up in the most recent release tags as a fallback.
 
 ## Install
 
@@ -320,7 +320,7 @@ python: cpython-3.12.7
 
 ### `sdkvm uninstall <version>`
 
-Same syntax as `use`. Uninstalling the current version clears that `current-*` link and asks you to pick another. Other installed versions stay.
+Same syntax as `use`. Uninstalling the current version clears that `current-*` link — on macOS/Linux the sdkvm block is removed from your rc file, on Windows the matching environment variables and user PATH entries are removed — then asks you to pick another. Other installed versions stay.
 
 ### `sdkvm mirror`
 
@@ -396,6 +396,7 @@ Rules:
 - Maven lists stable `x.y.z` releases from 3.0 upward. `latest`, `3`, and `3.9` skip prereleases; install `4.0.0-rc-4` with the full string. Maven has no `lts` alias.
 - Java `lts` follows the Adoptium list: 8 / 11 / 17 / 21 / 25. Node.js `lts` is the newest `index.json` entry that carries an LTS codename.
 - Node.js rejects a two-part version such as `22.20`. Use `22` or `22.20.0`.
+- Java accepts the legacy major form: `1.8` is `8`. Update-style input such as `1.8.0_392` is not supported — use `8` (latest) or `8.0.392+b06` (an exact build).
 - Miniconda versions look like `py313_26.7.1-1`. `26` is the newest of that major. `26.7` is the newest of that minor line. `26.7.1-1` is the highest Python for that build. `py313` is the newest installer for that Python. `py313_26.7.1-1` pins both. There is no `lts` alias. The `latest` filename alias is ignored.
 - Python versions look like `3.12.7`. `3`, `3.12`, and `latest` stay on stable releases; a prerelease such as `3.14.0rc2` must be written in full. There is no `lts` alias. The build date `+20260924` is not part of the directory name. This is CPython and does not change conda channels. When both Python and Miniconda have been `use`d, the rc block written later is earlier on `PATH`.
 - Omitting the vendor uses the default distribution. Only Java's default is configurable. See [Config file](#config-file).
