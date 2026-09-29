@@ -33,7 +33,11 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
     }
     result.push({ type, version, dirPath, home: spec.locateHome(dirPath) });
   }
-  result.sort((a, b) => spec.compareVersions(a.version, b.version));
+  // 版本相同的两条（java 跨 vendor 并存）用 vendor 名决出确定序，
+  // 否则 `use 21` 选谁取决于 readdir 顺序（文件系统不保证字母序）
+  result.sort(
+    (a, b) => spec.compareVersions(a.version, b.version) || a.version.vendor.localeCompare(b.version.vendor),
+  );
   return result;
 }
 
@@ -41,12 +45,15 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
 export function currentSdk(type: SdkTypeId): InstalledSdk | null {
   const current = readCurrent(type);
   if (!current) return null;
+  // Windows 文件系统大小写不敏感：两次会话用不同大小写设置 SDKVM_HOME 时，
+  // 逐字节比较会把明明指向自己的 current 判成不匹配，跳过 rc/注册表清理
+  const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
   return (
     listInstalled(type).find(
       (j) =>
-        j.home === current ||
-        j.dirPath === current ||
-        current.startsWith(j.dirPath + path.sep),
+        norm(j.home) === norm(current) ||
+        norm(j.dirPath) === norm(current) ||
+        norm(current).startsWith(norm(j.dirPath) + path.sep),
     ) ?? null
   );
 }

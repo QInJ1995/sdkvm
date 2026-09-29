@@ -3,6 +3,7 @@ import path from 'node:path';
 import { JAVA_VENDOR_IDS } from './version.js';
 import { acquireLock, releaseLock } from './lock.js';
 import { ensureLayout, paths } from './paths.js';
+import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
 
 export interface SdkvmConfig {
@@ -41,8 +42,18 @@ function blankConfig(defaultVendor = 'temurin'): SdkvmConfig {
 export function loadConfig(): SdkvmConfig {
   const file = paths.config();
   if (!fs.existsSync(file)) return blankConfig();
+  let raw: string;
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<SdkvmConfig>;
+    raw = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    // IO 错误（Windows 杀毒共享冲突 / 权限）不是配置损坏：上抛而不是备份重置，
+    // 否则完好的 config.json 会被改名 .bak，下一次写入就把用户配置全部冲掉。
+    throw new SdkvmError(`Cannot read config at ${file}`, {
+      hint: `${(err as Error).message}. Fix the permission or remove the file manually.`,
+    });
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<SdkvmConfig>;
     const config = blankConfig(
       parsed.defaultVendor && (JAVA_VENDOR_IDS as readonly string[]).includes(parsed.defaultVendor)
         ? parsed.defaultVendor
@@ -66,6 +77,7 @@ export function loadConfig(): SdkvmConfig {
     if (typeof parsed.mavenSettings === 'string') config.mavenSettings = parsed.mavenSettings.trim();
     return config;
   } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
     const bak = `${file}.bak`;
     try {
       fs.renameSync(file, bak);
@@ -73,7 +85,6 @@ export function loadConfig(): SdkvmConfig {
     } catch {
       // 备份失败也继续用默认值
     }
-    void err;
     return blankConfig();
   }
 }

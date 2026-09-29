@@ -52,9 +52,10 @@ export async function setSdkEnvWin(type: SdkTypeId): Promise<void> {
 
 /**
  * 把指定 entry（如 %JAVA_HOME%\bin）追加到用户 PATH。
- * 关键点：用 DoNotExpandEnvironmentNames 读原始值，保留 %VAR% 引用与 REG_EXPAND_SZ 类型
- * （.NET SetEnvironmentVariable 会把类型降级为 REG_SZ，破坏 %USERPROFILE% 类引用），
- * 最后广播 WM_SETTINGCHANGE 让 Explorer 刷新环境。
+ * 关键点：用 DoNotExpandEnvironmentNames 读原始值，保留 %VAR% 引用（.NET SetEnvironmentVariable
+ * 会把类型降级为 REG_SZ，破坏 %USERPROFILE% 类引用），最后广播 WM_SETTINGCHANGE。
+ * 写入值恒含 %VAR% 引用 → 恒写 REG_EXPAND_SZ：即使原 Path 是 REG_SZ（setx 的典型后果），
+ * %JAVA_HOME%\bin 在 REG_SZ 里也永不展开；升级为 REG_EXPAND_SZ 对无 % 的既有条目无影响。
  */
 export async function ensureUserPathWin(entry: string): Promise<void> {
   const ps = [
@@ -65,27 +66,24 @@ export async function ensureUserPathWin(entry: string): Promise<void> {
     "$parts=@($raw -split ';' | Where-Object { $_ -ne '' })",
     `if($parts -notcontains '${entry.replace(/'/g, "''")}'){`,
     `  $parts += '${entry.replace(/'/g, "''")}'`,
-    "  $kind=[Microsoft.Win32.RegistryValueKind]::ExpandString",
-    "  if($k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String){ $kind=[Microsoft.Win32.RegistryValueKind]::String }",
-    "  $k.SetValue('Path', ($parts -join ';'), $kind)",
+    "  $k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     "}",
     ...broadcastPs(),
   ].join('\n');
   await run('powershell.exe', encoded(ps));
 }
 
-/** 卸载辅助：从用户 PATH 移除 entry（不存在则忽略）。保留 Path 原值类型，与 ensureUserPathWin 对称。 */
+/** 卸载辅助：从用户 PATH 移除 entry（Path 不存在或不含 entry 时不动注册表）。 */
 export async function removeFromUserPathWin(entry: string): Promise<void> {
   const escaped = entry.replace(/'/g, "''");
   const ps = [
     "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
     "if(-not $k){ exit 0 }",
     "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
+    "if($null -eq $k.GetValue('Path', $null)){ exit 0 }",
     "$raw=[string]$k.GetValue('Path','',$fmt)",
     `$parts=@($raw -split ';' | Where-Object { $_ -ne '' -and $_ -ne '${escaped}' })`,
-    "$kind=[Microsoft.Win32.RegistryValueKind]::ExpandString",
-    "if($k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String){ $kind=[Microsoft.Win32.RegistryValueKind]::String }",
-    "$k.SetValue('Path', ($parts -join ';'), $kind)",
+    "$k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     ...broadcastPs(),
   ].join('\n');
   await run('powershell.exe', encoded(ps));

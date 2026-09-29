@@ -56,15 +56,19 @@ function touchLock(): void {
     // ignore
   }
   try {
-    const pid = readLockPid() ?? process.pid;
-    let startedAt = Date.now();
-    try {
-      const raw = JSON.parse(fs.readFileSync(lockInfoPath(), 'utf8')) as { startedAt?: number };
-      if (typeof raw.startedAt === 'number') startedAt = raw.startedAt;
-    } catch {
-      // rewrite below
+    // 只在锁目录明确归属自己时刷新 info.json：holder 未知（info.json 缺失/损坏）时
+    // 贸然写入会把别人的锁据为己有，等 STALE_MS 让等待者按 stale 处理更安全。
+    const pid = readLockPid();
+    if (pid === process.pid) {
+      let startedAt = Date.now();
+      try {
+        const raw = JSON.parse(fs.readFileSync(lockInfoPath(), 'utf8')) as { startedAt?: number };
+        if (typeof raw.startedAt === 'number') startedAt = raw.startedAt;
+      } catch {
+        // rewrite below
+      }
+      writeLockInfo(startedAt);
     }
-    if (pid === process.pid) writeLockInfo(startedAt);
   } catch {
     // ignore
   }
@@ -72,6 +76,32 @@ function touchLock(): void {
   if (heartbeatFailures === 3) {
     log.warn('sdkvm lock heartbeat keeps failing; another sdkvm may treat this lock as stale');
   }
+}
+
+function removeLockDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch (err) {
+    throw new SdkvmError(`Cannot clear the stale lock at ${dir}`, {
+      hint: `${(err as Error).message}. Close other sdkvm processes, then remove the directory manually.`,
+    });
+  }
+}
+
+/**
+ * 偷锁必须原子：先把锁目录 rename 成自己的暂存名，只有唯一赢家（其余 ENOENT），
+ * 再由赢家清理暂存目录。直接 rmSync + mkdir 的话，两个等待者可以先后删掉彼此的新锁。
+ */
+function stealLock(lockDir: string): boolean {
+  const staging = `${lockDir}.stale-${process.pid}`;
+  try {
+    fs.renameSync(lockDir, staging);
+  } catch {
+    // 锁已被其他等待者偷走或持有者刚释放：回到上层重取
+    return false;
+  }
+  removeLockDir(staging);
+  return true;
 }
 
 /** mkdir 原子锁：防止并发 install/uninstall 写冲突 */
@@ -86,7 +116,7 @@ export function acquireLock(): void {
     if (e.code === 'EEXIST') {
       const holder = readLockPid();
       if (holder != null && !isProcessAlive(holder)) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+        stealLock(lockDir);
         return acquireLock();
       }
       // 持有者可能恰好在此期间退出（或另一个等待者已清走锁）：锁没了就直接重取
@@ -97,7 +127,7 @@ export function acquireLock(): void {
         return acquireLock();
       }
       if (Date.now() - stat.mtimeMs > STALE_MS) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+        stealLock(lockDir);
         return acquireLock();
       }
       throw new SdkvmError('Another sdkvm operation is in progress', {
@@ -109,7 +139,10 @@ export function acquireLock(): void {
 }
 
 export function releaseLock(): void {
-  fs.rmSync(paths.lock(), { recursive: true, force: true });
+  // 锁可能已按 stale 被别人偷走：只有 info.json 仍归属自己时才删除
+  if (readLockPid() === process.pid) {
+    fs.rmSync(paths.lock(), { recursive: true, force: true });
+  }
 }
 
 export async function withLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -121,6 +154,15 @@ export async function withLock<T>(fn: () => Promise<T>): Promise<T> {
     return await fn();
   } finally {
     clearInterval(timer);
-    releaseLock();
+    try {
+      releaseLock();
+    } catch (err) {
+      // 释放失败（如 Windows 杀软短暂锁文件）不能吞掉真正的业务异常
+      if (err instanceof SdkvmError) {
+        log.warn(err.message);
+      } else {
+        log.warn(`failed to release the sdkvm lock: ${(err as Error).message}`);
+      }
+    }
   }
 }

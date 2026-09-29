@@ -50,6 +50,20 @@ export function rcBlock(type: SdkTypeId): string {
   ].join('\n');
 }
 
+/** 标记块内容（fish 语法）：set -gx + fish_add_path 自带幂等，无需 case 守卫 */
+export function rcBlockFish(type: SdkTypeId): string {
+  const spec = getSdkType(type);
+  const binSuffix = spec.envBinSuffix(detectPlatform()).replace(/\\/g, '/');
+  const abs = paths.current(type);
+  const toPosix = (p: string) => p.split(path.sep).join('/');
+  return [
+    rcBegin(type),
+    `set -gx ${spec.envVar} '${toPosix(abs).replace(/'/g, "'\\''")}'`,
+    `fish_add_path -p $${spec.envVar}${binSuffix}`,
+    rcEnd(type),
+  ].join('\n');
+}
+
 /** 删除指定类型的标记块（幂等） */
 export function stripRcBlock(content: string, type: SdkTypeId): string {
   return stripBlockBetween(content, rcBegin(type), rcEnd(type));
@@ -58,9 +72,22 @@ export function stripRcBlock(content: string, type: SdkTypeId): string {
 function stripBlockBetween(content: string, begin: string, end: string): string {
   const re = new RegExp(`\\n*${escapeRegex(begin)}[\\s\\S]*?${escapeRegex(end)}\\n*`, 'g');
   let out = content.replace(re, '\n');
-  // 半损坏块（end 标记被删/改）也要清掉：从 begin 起删到文件尾，避免 upsert 追加出重复块
-  const broken = new RegExp(`\\n*${escapeRegex(begin)}[\\s\\S]*$`);
-  out = out.replace(broken, '\n');
+  // 半损坏块（end 标记被删/改）：完整块已被上面清掉，剩下的 begin 必属损坏块。
+  // 只删到下一个 sdkvm 块标记为止；其后没有其它标记时无法区分"块内容"与
+  // 用户自己的配置，仅移除标记行本身并警告，绝不删到文件尾。
+  const idx = out.indexOf(begin);
+  if (idx >= 0) {
+    const after = out.slice(idx + begin.length);
+    const nextMarker = after.search(/\n# (?:>>>|<<<) sdkvm /);
+    if (nextMarker >= 0) {
+      out = out.slice(0, idx) + after.slice(nextMarker);
+    } else {
+      out = out.slice(0, idx) + after.replace(/^[^\n]*(\n|$)/, '');
+      log.warn(
+        `found an unterminated ${CLI_BIN} init marker in the rc file; removed the marker line only — check the file manually`,
+      );
+    }
+  }
   return out;
 }
 
@@ -88,8 +115,16 @@ export function upsertRcFile(file: string, type: SdkTypeId): void {
 
 export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {
   if (!fs.existsSync(file)) return;
-  const content = fs.readFileSync(file, 'utf8');
+  const raw = fs.readFileSync(file);
+  const content = raw.toString('utf8');
   const stripped = stripRcBlock(content, type);
-  if (stripped !== content) fs.writeFileSync(file, stripped);
+  if (stripped === content) return;
+  // 与 upsertRcFile 相同的保护：非 UTF-8 字节先备份再写回
+  if (!Buffer.from(content, 'utf8').equals(raw)) {
+    const bak = `${file}.sdkvm-bak`;
+    fs.copyFileSync(file, bak);
+    log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
+  }
+  fs.writeFileSync(file, stripped);
 }
 

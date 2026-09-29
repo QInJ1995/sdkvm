@@ -44,6 +44,12 @@ export function parseVersion(vendor: VendorId, input: string): SdkVersion {
     });
   }
   const nums = segs.map((x) => Number(x));
+  // build 段也必须是纯数字串（"11_LTS" 之类会在排序比较里落入 localeCompare，顺序随 locale 漂移）
+  if (build != null && !/^\d+(\.\d+)*$/.test(build)) {
+    throw new SdkvmError(`Invalid JDK version: "${input}"`, {
+      hint: 'Expected forms: 21, 21.0.5, 21.0.5+11',
+    });
+  }
   return {
     vendor,
     major: nums[0] as number,
@@ -215,8 +221,8 @@ export function parseUserSpec(input: string): UserSpec {
     s = m[2];
   }
   if (s === 'lts' || s === '--lts') return { vendor, spec: { kind: 'lts' } };
-  // 旧式 1.x 写法：1.8 即 8；更细的旧式（1.8.0_392）给出现代写法提示
-  const legacy = /^1\.(\d+)([._].*)?$/.exec(s);
+  // 旧式 1.x 写法：1.8 即 8；更细的旧式（1.8.0_392 / 1.8+11）给出现代写法提示
+  const legacy = /^1\.(\d+)([._+].*)?$/.exec(s);
   if (legacy && legacy[1]) {
     if (!legacy[2]) return { vendor, spec: { kind: 'major', major: Number(legacy[1]) } };
     throw new SdkvmError(`Invalid version: "${input}"`, {

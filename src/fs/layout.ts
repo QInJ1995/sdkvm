@@ -111,9 +111,29 @@ export function assertContained(destDir: string, root: string): void {
         } catch {
           real = null;
         }
-        if (!real || !withinReal(real)) {
+        // 悬空链接（目标不存在）无法 realpath：按链接文本做词法判断——
+        // 相对目标 resolve 后仍须落在包内；绝对目标才视为越界
+        if (!real) {
+          let target: string | null = null;
+          try {
+            target = fs.readlinkSync(entryPath);
+          } catch {
+            target = null;
+          }
+          if (target == null) continue;
+          const resolved = path.isAbsolute(target)
+            ? path.resolve(target)
+            : path.resolve(path.dirname(entryPath), target);
+          if (!withinReal(resolved)) {
+            throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
+              hint: `${target} → ${resolved}`,
+            });
+          }
+          continue;
+        }
+        if (!withinReal(real)) {
           throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
-            hint: real ?? entryPath,
+            hint: real,
           });
         }
       }
