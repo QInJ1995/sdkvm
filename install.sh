@@ -43,6 +43,11 @@ fetch() {
   elif command -v wget >/dev/null 2>&1; then
     if ! wget -q --tries=3 --timeout=15 -O "$dest" "$url"; then
       echo "sdkvm: download failed: $url" >&2
+      case "$url" in
+        */releases/*/download/*)
+          echo "sdkvm: hint: publish a GitHub Release (push a v* tag) with sdkvm.tgz, or install via: npm install -g sdkvm" >&2
+          ;;
+      esac
       exit 1
     fi
   else
@@ -167,21 +172,25 @@ ensure_path_rc() {
     "case \":\$PATH:\" in *\":${path_ref}:\"*) ;; *) export PATH=\"${path_ref}:\$PATH\";; esac" \
     "$end")
 
-  tmp=$(mktemp)
+  # 注意：本函数在 `if ! ensure_path_rc; then` 的条件上下文里执行，set -e 不生效，
+  # 每一步都必须显式检查，绝不能在失败时把 $rc 截断重写
+  tmp=$(mktemp) || return 1
   if [ -f "$rc" ]; then
     awk -v b="$begin" -v e="$end" '
       $0 == b { skip=1; next }
       skip && $0 == e { skip=0; next }
       !skip { print }
-    ' "$rc" > "$tmp"
+    ' "$rc" > "$tmp" || { rm -f "$tmp"; return 1; }
   else
-    : > "$tmp"
+    : > "$tmp" || { rm -f "$tmp"; return 1; }
   fi
+  # 先写 $rc.new 再 mv：mv 失败时原 rc 完好无损
   if [ -s "$tmp" ]; then
-    printf '%s\n\n%s\n' "$(cat "$tmp")" "$block" > "$rc"
+    { cat "$tmp"; printf '\n%s\n' "$block"; } > "$rc.new" || { rm -f "$tmp" "$rc.new"; return 1; }
   else
-    printf '%s\n' "$block" > "$rc"
+    printf '%s\n' "$block" > "$rc.new" || { rm -f "$tmp" "$rc.new"; return 1; }
   fi
+  mv "$rc.new" "$rc" || { rm -f "$tmp" "$rc.new"; return 1; }
   rm -f "$tmp"
   echo "sdkvm: updated PATH in $rc (open a new terminal or: source $rc)"
   return 0

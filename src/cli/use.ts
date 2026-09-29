@@ -10,12 +10,17 @@ import { setCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { detectRcFile } from '../shell/detect.js';
-import { rcBegin, rcBlock, upsertRcFile } from '../shell/rc.js';
+import { rcBegin, rcBlock, rcBlockFish, upsertRcFile } from '../shell/rc.js';
 import { ensureUserPathWin, setSdkEnvWin, sdkPathEntries } from '../shell/winenv.js';
 import { log } from '../ui/log.js';
 import { CLI_BIN } from './cmdname.js';
 
 const execFileAsync = promisify(execFile);
+
+/** fish 的 $SHELL 以 /fish 结尾（含 /usr/bin/fish） */
+function isFishShell(): boolean {
+  return /(^|\/)fish$/.test(process.env.SHELL ?? '');
+}
 
 /** rc 已写入 java 标记块时，JAVA_HOME 会在新 shell 里生效，无需再提示装 JDK */
 function rcExportsJava(platform: Platform, rc: string | null): boolean {
@@ -75,11 +80,14 @@ export async function useCommand(
   if (platform.os === 'windows') {
     log.info(`${spec.envVar} and PATH updated in user environment`);
     log.warn('reopen your terminal (or restart your IDE) for the change to take effect');
+    // 用户 PATH 排在系统 PATH 之后：系统级同名工具会遮蔽 sdkvm 的切换
+    log.warn(`if a system-wide ${spec.label} is on the system PATH, it wins — move ${spec.envVar} entries ahead of it or remove the system entry`);
   } else if (rc) {
     log.info(`updated ${rc} — run: source ${rc} (or open a new terminal)`);
   } else {
     log.warn('could not detect your shell; add this to your rc file manually:');
-    console.log(rcBlock(type));
+    // rcBlock 是 POSIX 语法，对 fish 不合法
+    console.log(isFishShell() ? rcBlockFish(type) : rcBlock(type));
   }
   if (spec.requiresJdk && !envGet('JAVA_HOME') && !rcExportsJava(platform, rc)) {
     log.warn(`${spec.label} needs a JDK. Run: ${CLI_BIN} java use <version>`);

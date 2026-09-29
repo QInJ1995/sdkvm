@@ -448,6 +448,12 @@ export function mrmAdd(name: string, url: string): void {
       hint: 'Use letters, digits, _ or -; must start with a letter',
     });
   }
+  if (key.toLowerCase() === 'custom') {
+    // "custom" 是 ls 输出里"未命名自定义 URL"的伪名，占用会造成两行同名条目
+    throw new SdkvmError(`"${key}" is a reserved name`, {
+      hint: 'Pick another name for your registry.',
+    });
+  }
   if (isBuiltinMavenRegistryName(key)) {
     throw new SdkvmError(`Cannot overwrite built-in registry "${key}"`, {
       hint: `Pick another name, or use: sdkvm mrm use ${key}`,
@@ -507,16 +513,23 @@ export async function mrmTest(
     if (!entry) throw unknownRegistry(name);
     targets = [{ ...entry, list: true }];
   }
-  for (const p of targets) {
-    const isCurrent = active.name === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(active.url);
-    try {
-      const ms = await probe(p.url);
-      log.raw(formatMrmListLine(p.name, `${ms} ms`, isCurrent));
-    } catch (err) {
-      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
-      log.raw(formatMrmListLine(p.name, `Fetch Error (${detail})`, isCurrent));
-    }
-  }
+  // 并行探测；全部失败时置非零退出码（与 `ls -r` 全厂商失败一致），CI 靠退出码感知
+  let failures = 0;
+  const lines = await Promise.all(
+    targets.map(async (p) => {
+      const isCurrent = active.name === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(active.url);
+      try {
+        const ms = await probe(p.url);
+        return formatMrmListLine(p.name, `${ms} ms`, isCurrent);
+      } catch (err) {
+        failures++;
+        const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        return formatMrmListLine(p.name, `Fetch Error (${detail})`, isCurrent);
+      }
+    }),
+  );
+  for (const line of lines) log.raw(line);
+  if (failures === targets.length && targets.length > 0) process.exitCode = 1;
 }
 
 export function mrmSettings(arg: string | undefined, opts: { settings?: string } = {}): void {

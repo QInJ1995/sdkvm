@@ -71,7 +71,10 @@ function registerSdkCommands(cmd: Command, type: SdkTypeId): void {
 
   cmd
     .command('current')
-    .description(`show the current ${s.label}`)
+    .description(
+      // 裸命令（java）的 current 被重绑为显示全部类型（见下方 currentCommand()）
+      `show the current ${s.label}${type === 'java' ? 's (bare "sdkvm current" lists every SDK type)' : ''}`,
+    )
     .action(() => currentCommand([type]));
 
   cmd

@@ -137,6 +137,11 @@ export function scheduleWindowsCliReplace(home: string): void {
     stdio: 'ignore',
     windowsHide: true,
   });
+  // detached spawn 异步 emit 'error'（EMFILE 等）无监听会变成 uncaughtException
+  child.on('error', (err) => {
+    log.warn(`could not schedule the upgrade script: ${err.message}`);
+    log.warn(`run it manually: ${script}`);
+  });
   child.unref();
 }
 

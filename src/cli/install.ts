@@ -103,7 +103,8 @@ export async function installCommand(
     if (fs.existsSync(finalDir)) {
       if (!opts.force) {
         log.warn(`${artifact.displayName} is already installed`);
-        log.info(`run: ${cmdPath(type)} use ${hintVersion}`);
+        // 与成功路径一致：`use <major>` 命中更新的已装版本时退回完整规格
+        log.info(`run: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
         return;
       }
       log.warn(`--force: removing existing ${artifact.dirName}`);

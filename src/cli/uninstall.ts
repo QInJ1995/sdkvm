@@ -18,10 +18,9 @@ export async function uninstallCommand(
 ): Promise<void> {
   const spec = getSdkType(type);
   const platform = detectPlatform();
-  const installed = findInstalled(type, specInput, opts.vendor);
   await withLock(async () => {
-    // 先判 current 再删目录：删完之后 listInstalled 里已没有它，
-    // currentSdk 会把"当前版本"误判成"不是当前"，跳过链接与 rc 清理
+    // 查找放进锁内（与 useCommand 一致）：避免锁外 find 之后被并发安装/卸载改掉目标
+    const installed = findInstalled(type, specInput, opts.vendor);
     // 先判 current 再删目录：删完之后 listInstalled 里已没有它，
     // currentSdk 会把"当前版本"误判成"不是当前"，跳过链接与 rc 清理
     const wasCurrent = currentSdk(type)?.dirPath === installed.dirPath;
@@ -47,6 +46,6 @@ export async function uninstallCommand(
       }
     }
     log.info(`select another: ${cmdPath(type)} use <version>`);
+    log.ok(`removed ${installed.version.vendor}-${spec.formatVersion(installed.version)}`);
   });
-  log.ok(`removed ${installed.version.vendor}-${spec.formatVersion(installed.version)}`);
 }

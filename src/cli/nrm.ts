@@ -157,6 +157,12 @@ export function nrmAdd(name: string, url: string): void {
       hint: 'Use letters, digits, _ or -; must start with a letter',
     });
   }
+  if (key.toLowerCase() === 'custom') {
+    // "custom" 是 ls 输出里"未命名自定义 URL"的伪名，占用会造成两行同名条目
+    throw new SdkvmError(`"${key}" is a reserved name`, {
+      hint: 'Pick another name for your registry.',
+    });
+  }
   if (isBuiltinRegistryName(key)) {
     throw new SdkvmError(`Cannot overwrite built-in registry "${key}"`, {
       hint: 'Pick another name, or use: sdkvm nrm use ' + key,
@@ -227,14 +233,22 @@ export async function nrmTest(
     targets = [{ ...entry, list: true }];
   }
 
-  for (const p of targets) {
-    const isCurrent = matched === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(current);
-    try {
-      const ms = await probe(p.url);
-      log.raw(formatNrmListLine(p.name, `${ms} ms`, isCurrent));
-    } catch (err) {
-      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
-      log.raw(formatNrmListLine(p.name, `Fetch Error (${detail})`, isCurrent));
-    }
-  }
+  // 并行探测：串行 8 个源 × 5s 超时最坏要等 40s+
+  let failures = 0;
+  const lines = await Promise.all(
+    targets.map(async (p) => {
+      const isCurrent = matched === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(current);
+      try {
+        const ms = await probe(p.url);
+        return formatNrmListLine(p.name, `${ms} ms`, isCurrent);
+      } catch (err) {
+        failures++;
+        const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+        return formatNrmListLine(p.name, `Fetch Error (${detail})`, isCurrent);
+      }
+    }),
+  );
+  for (const line of lines) log.raw(line);
+  // 全部源都失败时不应表现为成功（与 `ls -r` 全厂商失败一致），CI 靠退出码感知
+  if (failures === targets.length && targets.length > 0) process.exitCode = 1;
 }

@@ -143,13 +143,9 @@ if defined SDKVM_HOME (
   }
   if (-not $already) {
     $parts = @($pathEntry) + $parts
-    $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
-    try {
-      if ($k.GetValueKind('Path') -eq [Microsoft.Win32.RegistryValueKind]::String) {
-        $kind = [Microsoft.Win32.RegistryValueKind]::String
-      }
-    } catch { }
-    $k.SetValue('Path', ($parts -join ';'), $kind)
+    # 写入值含 %USERPROFILE% 引用 → 恒用 REG_EXPAND_SZ：REG_SZ 里的 %VAR% 永不展开，
+    # 该条目会成为死 PATH；升级为 REG_EXPAND_SZ 对无 % 的既有条目无影响
+    $k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)
     Write-Host "sdkvm: added $pathEntry to user PATH (reopen the terminal)"
   }
   $k.Close()

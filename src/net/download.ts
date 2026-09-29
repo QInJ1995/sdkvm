@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { httpFetch } from './http.js';
 import { SdkvmError } from '../util/errors.js';
+import { renameWithRetry } from '../util/rename.js';
 
 export interface DownloadResult {
   file: string;
@@ -147,7 +148,8 @@ export async function downloadFile(
     fs.rmSync(partFile, { force: true });
     throw new SdkvmError(`Download incomplete: ${bytes}/${total} bytes`, { hint: url });
   }
-  fs.renameSync(partFile, destFile);
+  // 与安装目录落位一致：Windows 上杀毒可能短暂锁住刚写完的 .part
+  await renameWithRetry(partFile, destFile);
   return { file: destFile, sha256: hash.digest('hex'), bytes };
 }
 

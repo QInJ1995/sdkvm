@@ -139,9 +139,10 @@ export function mirrorCommand(
       });
     }
     if (!mirrorable.includes(vendor as MirrorVendorId)) {
+      const preset = availableSiteNamesForType(type).find((n) => n !== 'official');
       throw new SdkvmError(`mirroring is only supported for ${mirrorable.join(', ') || 'none'} (got "${vendor}")`, {
-        hint: first
-          ? `recommended: ${prefix} mirror use nju  (or set URL: ${prefix} mirror set ${first} <url>)`
+        hint: preset
+          ? `recommended: ${prefix} mirror use ${preset}  (or set URL: ${prefix} mirror set ${first} <url>)`
           : undefined,
       });
     }
@@ -193,7 +194,9 @@ export function mirrorCommand(
     log.raw(`  ${id.padEnd(8)} ${url ?? '(official)'}`);
   }
   if (first) {
+    const preset = availableSiteNamesForType(type).find((n) => n !== 'official');
     log.raw(`list sites: ${prefix} mirror ls`);
-    log.raw(`use a site: ${prefix} mirror use nju`);
+    // 提示的站点必须真的覆盖本类型（maven 只有 aliyun/huawei，cpython 无预设）
+    if (preset) log.raw(`use a site: ${prefix} mirror use ${preset}`);
   }
 }
