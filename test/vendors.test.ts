@@ -435,6 +435,9 @@ describe('corretto', () => {
 
 describe('zulu listMajors', () => {
   it('warns and hides only the failed majors', async () => {
+    // listMajors 走 detectPlatform()：mock 的包名必须带宿主平台的归档扩展名，
+    // 否则会被 pickPlainJdk 的 ext 过滤掉（Windows 要 .zip，其余 .tar.gz）
+    const hostExt = process.platform === 'win32' ? 'zip' : 'tar.gz';
     const fetchMock = vi.fn(async (url: string | URL) => {
       const u = String(url);
       if (u.includes('/v3/info/available_releases')) {
@@ -443,7 +446,7 @@ describe('zulu listMajors', () => {
       if (u.includes('java_version=17')) {
         return resJson([
           {
-            name: 'zulu17.56.19-ca-jdk17.0.12-macosx_aarch64.tar.gz',
+            name: `zulu17.56.19-ca-jdk17.0.12-host.${hostExt}`,
             download_url: 'https://cdn.azul.com/zulu/bin/z17.tar.gz',
             java_version: [17, 0, 12],
             distro_version: [17, 56, 19, 0],

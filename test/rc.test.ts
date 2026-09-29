@@ -11,6 +11,8 @@ import {
   upsertRcContent,
   upsertRcFile,
 } from '../src/shell/rc.js';
+import { detectPlatform } from '../src/core/platform.js';
+import { getSdkType } from '../src/sdk/index.js';
 
 /** 避免宿主环境的 SDKVM_HOME（如 /Volumes/Develop/sdkvm）干扰默认路径断言 */
 let savedSdkvmHome: string | undefined;
@@ -135,10 +137,12 @@ describe('miniconda rc block', () => {
 describe('python rc block', () => {
   it('exports PYTHON_HOME and prepends bin', () => {
     const block = rcBlock('python');
+    // PATH 条目 = envVar + 当前平台的 bin 后缀（Windows 上 python 的可执行文件在根目录，后缀为空）
+    const binSuffix = getSdkType('python').envBinSuffix(detectPlatform()).replace(/\\/g, '/');
     expect(block).toContain('PYTHON_HOME=');
     expect(block).toContain('current-python');
     expect(block).toContain('"$HOME/.sdkvm/current-python"');
-    expect(block).toContain('"$PYTHON_HOME/bin:$PATH"');
+    expect(block).toContain(`"$PYTHON_HOME${binSuffix}:$PATH"`);
     expect(block).not.toContain('conda.sh');
   });
 });

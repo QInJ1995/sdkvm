@@ -32,7 +32,9 @@ afterEach(() => {
   fs.rmSync(userHome, { recursive: true, force: true });
 });
 
-describe('uninstall 当前版本', () => {
+// 本组断言 POSIX rc 语义；Windows 上 uninstallCommand 走注册表分支
+// （还会真实修改运行用户的注册表），Windows 真实链路由 CI 的 e2e job 覆盖
+describe.skipIf(process.platform === 'win32')('uninstall 当前版本', () => {
   it('删除目录、清除 current 链接并移除 rc 标记块', async () => {
     const dir = path.join(home, 'jdks', 'temurin-21.0.5+11');
     const javaHome = path.join(dir, 'Contents', 'Home');
