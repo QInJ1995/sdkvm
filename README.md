@@ -142,7 +142,7 @@ irm https://raw.githubusercontent.com/QInJ1995/sdkvm/main/install.ps1 | iex
 
 ```console
 $ sdkvm version
-1.0.5
+1.0.6
 ```
 
 自定义数据根目录时,**必须在安装命令的环境里显式携带 `SDKVM_HOME`**
@@ -485,7 +485,7 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 
 ```console
 $ sdkvm version
-1.0.5
+1.0.6
 ```
 
 `sdkvm upgrade`(无参数):脚本安装时从 GitHub Release 下载新版本并原子替换
