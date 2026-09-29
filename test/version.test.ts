@@ -461,3 +461,44 @@ describe('java 旧式 1.x 语法', () => {
     expect(() => parseUserSpec('1.8.0_392')).toThrow(/Invalid version: "1\.8\.0_392"/);
   });
 });
+
+describe('JDK 8 跨厂商排序', () => {
+  // Corretto 把 update 放 minor（8.504.01.1），Temurin/Zulu 放 patch（8.0.504+1）：
+  // minor 先于 patch 比较会让任何 Corretto 8 压过更高 update 的 Temurin/Zulu 8
+  it('按统一后的 update 分胜负，不按 minor 编码差异', () => {
+    const c504 = parseVersion('corretto', '8.504.01.1');
+    const t504 = parseVersion('temurin', '8.0.504+1');
+    const t512 = parseVersion('temurin', '8.0.512+6');
+    const z504 = parseVersion('zulu', '8.0.504');
+    expect(compareVersions(t512, c504)).toBe(1);
+    expect(compareVersions(c504, t512)).toBe(-1);
+    expect(compareVersions(c504, t504)).toBe(0);
+    expect(compareVersions(c504, z504)).toBe(1); // build 决胜：extra 1 vs 无 build
+  });
+
+  it('同 update 平手时 Corretto 的 extra 段参与 build 决胜', () => {
+    const c1 = parseVersion('corretto', '8.504.01.1');
+    const t2 = parseVersion('temurin', '8.0.504+2');
+    expect(compareVersions(c1, t2)).toBe(-1);
+    expect(compareVersions(t2, c1)).toBe(1);
+  });
+});
+
+describe('用户输入 v / go 前缀', () => {
+  it('java：v21 / V21.0.5+11 与无前缀等价', () => {
+    expect(parseUserSpec('v21')).toEqual(parseUserSpec('21'));
+    expect(parseUserSpec('V21.0.5+11')).toEqual(parseUserSpec('21.0.5+11'));
+    expect(parseUserSpec('zulu-v8.0.504')).toEqual(parseUserSpec('zulu-8.0.504'));
+  });
+
+  it('go：go1.24.3 / v1.24 与无前缀等价；裸 "go" 仍被拒绝', () => {
+    expect(parseGoUserSpec('go1.24.3')).toEqual(parseGoUserSpec('1.24.3'));
+    expect(parseGoUserSpec('v1.24')).toEqual(parseGoUserSpec('1.24'));
+    expect(() => parseGoUserSpec('go')).toThrow();
+  });
+
+  it('node：v22.11.0 与无前缀等价', () => {
+    expect(parseNodeUserSpec('v22.11.0')).toEqual(parseNodeUserSpec('22.11.0'));
+    expect(parseNodeUserSpec('v22')).toEqual(parseNodeUserSpec('22'));
+  });
+});

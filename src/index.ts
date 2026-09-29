@@ -217,7 +217,9 @@ mrmCmd
   .alias('rm')
   .description('delete a custom Maven repository mirror')
   .argument('<name>', 'custom registry name')
-  .action((name: string) => mrmDel(name));
+  .action(function (this: Command, name: string) {
+    mrmDel(name, { settings: mrmFlag(this) });
+  });
 mrmCmd
   .command('test')
   .description('GET a known POM from each repository and print latency')

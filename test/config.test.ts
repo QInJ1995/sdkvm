@@ -53,6 +53,19 @@ describe('config', () => {
     expect(fs.existsSync(path.join(home, 'config.json.bak'))).toBe(true);
   });
 
+  it('valid-JSON non-object (null / number / array) counts as corruption, not a crash', () => {
+    // JSON.parse(null) 成功但 defaultVendor 属性访问会 TypeError：必须走损坏兜底
+    fs.writeFileSync(path.join(home, 'config.json'), 'null');
+    expect(loadConfig().defaultVendor).toBe('temurin');
+    expect(fs.existsSync(path.join(home, 'config.json.bak'))).toBe(true);
+
+    fs.writeFileSync(path.join(home, 'config.json'), '42');
+    expect(loadConfig().mirror).toEqual({});
+
+    fs.writeFileSync(path.join(home, 'config.json'), '[1,2]');
+    expect(loadConfig().npmRegistries).toEqual({});
+  });
+
   it('invalid vendor falls back to temurin', () => {
     fs.writeFileSync(
       path.join(home, 'config.json'),

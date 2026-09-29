@@ -5,7 +5,6 @@ import { loadConfig, updateConfig } from '../core/config.js';
 import { acquireLock, releaseLock } from '../core/lock.js';
 import { envGet } from '../core/env.js';
 import { SdkvmError } from '../util/errors.js';
-import { escapeRegExp } from '../util/regex.js';
 import { log } from '../ui/log.js';
 import { LIST_NAME_RE, formatListLine, normalizeRegistryUrl } from '../ui/listformat.js';
 
@@ -131,19 +130,16 @@ export function formatMrmListLine(name: string, url: string, current: boolean): 
   return formatListLine(name, url, current);
 }
 
-function countOf(hay: string, needle: string): number {
-  let n = 0;
-  let i = 0;
-  while ((i = hay.indexOf(needle, i)) !== -1) {
-    n += 1;
-    i += needle.length;
-  }
-  return n;
+/** 标记必须独占一行（允许首尾空白）才算 sdkvm 块边界：
+ * 用户 XML 里行中出现的相同注释文本不是边界，按子串计数会误报"不配对"。
+ * renderBlock 生成的标记始终独占一行，新旧版本写的块都能识别。 */
+function countMarkerLines(content: string, marker: string): number {
+  return content.split('\n').filter((l) => l.trim() === marker).length;
 }
 
 function assertMarkers(content: string): void {
-  const begin = countOf(content, MRM_BEGIN);
-  const end = countOf(content, MRM_END);
+  const begin = countMarkerLines(content, MRM_BEGIN);
+  const end = countMarkerLines(content, MRM_END);
   if (begin !== end || begin > 1) {
     throw new SdkvmError('settings.xml has an unpaired sdkvm mrm marker', {
       hint: 'Remove the leftover <!-- >>> sdkvm mrm >>> --> comments by hand, then retry.',
@@ -152,8 +148,20 @@ function assertMarkers(content: string): void {
 }
 
 function stripBlock(content: string): string {
-  const re = new RegExp(`\\n*${escapeRegExp(MRM_BEGIN)}[\\s\\S]*?${escapeRegExp(MRM_END)}\\n*`, 'g');
-  return content.replace(re, '\n');
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of content.split('\n')) {
+    if (!skipping && line.trim() === MRM_BEGIN) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && line.trim() === MRM_END) {
+      skipping = false;
+      continue;
+    }
+    if (!skipping) kept.push(line);
+  }
+  return kept.join('\n');
 }
 
 function renderBlock(name: string, url: string): string {
@@ -298,7 +306,7 @@ export function applyMrmBlock(content: string, mirror: { name: string; url: stri
       hint: 'Fix the file, or point sdkvm mrm at another settings.xml.',
     });
   }
-  const hadBlock = content.includes(MRM_BEGIN);
+  const hadBlock = countMarkerLines(content, MRM_BEGIN) > 0;
   const stripped = stripBlock(content);
   if (!mirror) return hadBlock ? ensureTrailingNewline(stripped) : content;
   return ensureTrailingNewline(insertBlock(stripped, renderBlock(mirror.name, mirror.url)));
@@ -307,9 +315,12 @@ export function applyMrmBlock(content: string, mirror: { name: string; url: stri
 export function readMrmUrl(content: string): string | null {
   if (!content.trim()) return null;
   assertMarkers(content);
-  const re = new RegExp(`${escapeRegExp(MRM_BEGIN)}([\\s\\S]*?)${escapeRegExp(MRM_END)}`);
-  const body = re.exec(content)?.[1];
-  if (body === undefined) return null;
+  const lines = content.split('\n');
+  const beginIdx = lines.findIndex((l) => l.trim() === MRM_BEGIN);
+  if (beginIdx < 0) return null;
+  const endIdx = lines.findIndex((l, i) => i > beginIdx && l.trim() === MRM_END);
+  if (endIdx < 0) return null; // assertMarkers 已保证配对，这里防御
+  const body = lines.slice(beginIdx + 1, endIdx).join('\n');
   const url = /<url>\s*([^<\s]+)\s*<\/url>/.exec(body)?.[1];
   if (!url) {
     throw new SdkvmError('sdkvm mrm block has no <url>', {
@@ -335,6 +346,16 @@ function readFileIfExists(file: string): string {
 
 function writeSettings(file: string, content: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  // 非 UTF-8 的 settings.xml（GBK 注释等）：utf8 解码再写回会把原始字节换成替换字符，
+  // 且不可逆。写回前先备份原文件（与 rc 文件同款保护）
+  if (fs.existsSync(file)) {
+    const raw = fs.readFileSync(file);
+    if (!Buffer.from(raw.toString('utf8'), 'utf8').equals(raw)) {
+      const bak = `${file}.sdkvm-bak`;
+      fs.copyFileSync(file, bak);
+      log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
+    }
+  }
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, ensureTrailingNewline(content));
   try {
@@ -468,12 +489,13 @@ export function mrmAdd(name: string, url: string): void {
   log.ok(`added Maven registry ${key} → ${normalized}`);
 }
 
-export function mrmDel(name: string): void {
+export function mrmDel(name: string, opts: { settings?: string } = {}): void {
   const key = name.trim();
   if (isBuiltinMavenRegistryName(key)) {
     throw new SdkvmError(`Cannot delete built-in registry "${key}"`);
   }
   let deleted: string | undefined;
+  let deletedUrl: string | undefined;
   updateConfig((config) => {
     const existing = Object.keys(config.mavenRegistries).find((k) => k.toLowerCase() === key.toLowerCase());
     if (!existing) {
@@ -481,15 +503,33 @@ export function mrmDel(name: string): void {
         hint: 'Only registries added with sdkvm mrm add can be deleted',
       });
     }
+    deletedUrl = config.mavenRegistries[existing];
     delete config.mavenRegistries[existing];
     deleted = existing;
   });
+  // 删的恰是 settings.xml 里"当前生效"的镜像时，sdkvm 块会悬空指向已删地址：
+  // 移除标记块回到官方源（等价 use official）
+  const target = resolveSettingsTarget(opts.settings);
+  const active = activeMirror(target.file);
+  if (deletedUrl && normalizeRegistryUrl(active.url) === normalizeRegistryUrl(deletedUrl)) {
+    acquireLock();
+    try {
+      const existing = readFileIfExists(target.file);
+      const next = applyMrmBlock(existing, null);
+      if (next !== existing) writeSettings(target.file, next);
+    } finally {
+      releaseLock();
+    }
+    log.warn(`"${deleted}" was the active mirror; removed the sdkvm block (back to official)`);
+  }
   log.ok(`deleted Maven registry ${deleted}`);
 }
 
 /** GET 一个已知 POM。5xx、4xx 或网络错误记为 Fetch Error，命令本身仍成功。 */
 export async function defaultMavenRepoProbe(url: string): Promise<number> {
-  const target = `${url.replace(/\/+$/, '')}/${PROBE_POM}`;
+  // 经 URL 对象拼路径：字符串拼接会把 POM 路径加到 query 之后
+  const target = new URL(url);
+  target.pathname = target.pathname.replace(/\/+$/, '') + '/' + PROBE_POM;
   const started = Date.now();
   const res = await fetch(target, {
     method: 'GET',

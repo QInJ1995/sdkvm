@@ -67,17 +67,23 @@ Design goals:
 
 - Seven SDK types and three JDK distributions (Temurin / Zulu / Corretto) behind one interface.
 - One version-spec grammar — `lts`, `latest`, major lines, exact versions, and
-  vendor prefixes — shared by `install`, `use`, and `uninstall`.
+  vendor prefixes — shared by `install`, `use`, and `uninstall`; `v` / `go`
+  prefixes are tolerated, so you can paste `node --version` / `go version` output.
 - Cross-platform: macOS (Apple Silicon / Intel), mainstream Linux (x64 / aarch64),
   and Windows 10+ with junctions and `REG_EXPAND_SZ` user variables (no `setx` truncation).
 - Integrity: SHA-256 streamed during download and compared against official
-  manifests; Maven verifies the official SHA-512 (SHA-1 for old releases);
-  mirrored downloads and executable installers always require a verifiable hash.
+  manifests; expected hashes are only taken from official sources — mirror-hosted
+  sidecar files are controlled by the same mirror as the archive, so they never
+  define the expectation; mirrored downloads and executable installers require an
+  officially verifiable hash or fail **before** downloading. Maven verifies the
+  official SHA-512 (SHA-1 for old releases).
 - Download acceleration: built-in mirror sites (nju / tuna / aliyun / huawei /
   ustc) configured per SDK type, plus independent npm-registry (`nrm`) and
   Maven dependency-mirror (`mrm`) managers.
 - Atomic installs: extract and validate in a temp directory, then move into
-  place once; checksum failures and interruptions leave no residue.
+  place once; checksum failures and interruptions leave no residue. Installer
+  archives (Miniconda) are tracked with an `.incomplete` marker, so a hard-killed
+  install is recovered or cleaned up automatically on the next run.
 - Concurrency safety: installs, switches, removals, and upgrades share an
   exclusive file lock with PID liveness checks and heartbeats; crashed holders
   are recovered automatically.
@@ -88,7 +94,7 @@ Design goals:
 
 | SDK | Source | Version support | Notes |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only; on Linux, Zulu picks glibc builds only (musl variants are excluded) |
+| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only; on Linux, Zulu matches the host libc — glibc hosts get glibc builds, Alpine/musl hosts get musl variants |
 | Go | [go.dev/dl](https://go.dev/dl/) | every historical stable release | `latest`, `1.24`, `1.24.5` |
 | Flutter | official release manifest | stable / beta | both macOS architectures; Linux / Windows are x64 only; beta needs the full prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts` (currently 24 Krypton) / `latest` / major line / exact | npm switches together with the runtime |
@@ -474,7 +480,9 @@ sdkvm nrm test
 Built-in names: `npm`, `yarn`, `taobao` (alias `npmmirror`), `tencent`, `cnpm`,
 `huawei`, `npmMirror`. `custom` is a reserved name rejected by `add`; `test`
 probes all registries concurrently and exits non-zero only when every probe
-fails (a single failure just marks that row).
+fails (a single failure just marks that row). When `del` removes the registry
+currently in use, the npm config is reverted to the official npm registry so
+`.npmrc` never points at a deleted address.
 
 ### `sdkvm mrm <command>`
 
@@ -525,7 +533,13 @@ Behavior notes:
 - `custom` is a reserved name rejected by `add`; `test` exits non-zero only
   when every repository fails.
 - Unpaired marker comments (manual-edit leftovers) abort the command with a
-  repair hint.
+  repair hint. Markers are recognized only as **standalone lines**; the same
+  text appearing mid-line is user content and never treated as a block boundary.
+- When `del` removes the mirror currently in effect, the sdkvm block is removed
+  automatically (back to the official repository).
+- A settings.xml that is not valid UTF-8 (GBK comments, for example) is backed
+  up to `settings.xml.sdkvm-bak` before any write; no irreversible re-encoding
+  is performed.
 
 ### `sdkvm version` and `sdkvm upgrade`
 
@@ -556,6 +570,11 @@ are not listed are rejected with a rewrite suggestion.
 | `<vendor>-…` | Pin a distribution | Same | Same | Same | Same | Same | Same | `zulu-21`, `maven-3.9.9`, `cpython-3.12.7` |
 
 ### Per-SDK rules
+
+Every SDK tolerates a `v` prefix in version input, and Go additionally tolerates
+`go` (`go1.24.3` equals `1.24.3`). JDK 8 cross-vendor ordering compares the
+unified update number (Corretto `8.504.01.1` and Temurin `8.0.504+1` count as
+the same update).
 
 - **Java**: `lts` follows the Adoptium list, currently 8 / 11 / 17 / 21 / 25.
   `21.0.5` is a prefix and matches `21.0.5+11`. The legacy major form `1.8`
@@ -642,9 +661,11 @@ version. The first `use` appends a marked init block to the shell rc: zsh
 writes `~/.zshrc`; bash writes `~/.bash_profile` (macOS) or `~/.bashrc`
 (elsewhere). Each of the seven SDKs has its own block; the existing file
 encoding is checked before writing, and non-standard UTF-8 content is backed
-up first. The Miniconda block also sources `conda.sh` so `conda activate`
-works. After both Python and Miniconda are switched, the block written later
-comes first on `PATH`.
+up first. Markers are recognized only as **standalone lines** — the same text
+mid-line is user content. The Miniconda block also sources `conda.sh` so
+`conda activate` works (under fish it exports `CONDA_EXE` and friends and
+suggests `conda init fish`). After both Python and Miniconda are switched, the
+block written later comes first on `PATH`.
 
 ```sh
 # >>> sdkvm java init >>>

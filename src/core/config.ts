@@ -52,41 +52,55 @@ export function loadConfig(): SdkvmConfig {
       hint: `${(err as Error).message}. Fix the permission or remove the file manually.`,
     });
   }
+  let parsed: Partial<SdkvmConfig> | null = null;
+  let broken = false;
   try {
-    const parsed = JSON.parse(raw) as Partial<SdkvmConfig>;
-    const config = blankConfig(
-      parsed.defaultVendor && (JAVA_VENDOR_IDS as readonly string[]).includes(parsed.defaultVendor)
-        ? parsed.defaultVendor
-        : 'temurin',
-    );
-    if (parsed.mirror && typeof parsed.mirror === 'object') {
-      for (const [id, v] of Object.entries(parsed.mirror)) {
-        if (typeof v === 'string' && v.length > 0) config.mirror[id] = v;
-      }
-    }
-    if (parsed.npmRegistries && typeof parsed.npmRegistries === 'object') {
-      for (const [id, v] of Object.entries(parsed.npmRegistries)) {
-        if (typeof v === 'string' && v.length > 0) config.npmRegistries[id] = v;
-      }
-    }
-    if (parsed.mavenRegistries && typeof parsed.mavenRegistries === 'object') {
-      for (const [id, v] of Object.entries(parsed.mavenRegistries)) {
-        if (typeof v === 'string' && v.length > 0) config.mavenRegistries[id] = v;
-      }
-    }
-    if (typeof parsed.mavenSettings === 'string') config.mavenSettings = parsed.mavenSettings.trim();
-    return config;
-  } catch (err) {
-    if (!(err instanceof SyntaxError)) throw err;
+    parsed = JSON.parse(raw) as Partial<SdkvmConfig>;
+  } catch {
+    broken = true;
+  }
+  // 顶层必须是对象：null / 数组 / 标量都是合法 JSON，但不是配置——同样按损坏处理
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) broken = true;
+  if (broken) {
     const bak = `${file}.bak`;
     try {
       fs.renameSync(file, bak);
       log.warn(`config.json was corrupted; backed up to ${bak}, using defaults`);
-    } catch {
-      // 备份失败也继续用默认值
+    } catch (err) {
+      // 备份失败也要让用户知道，静默换默认值会被当成配置丢失
+      log.warn(
+        `config.json was corrupted and could not be backed up (${(err as Error).message}); using defaults`,
+      );
     }
     return blankConfig();
   }
+  // broken 已在上面提前返回，这里 parsed 一定是对象；?? {} 仅为满足类型收窄
+  const parsedConfig = parsed ?? {};
+  const config = blankConfig(
+    parsedConfig.defaultVendor &&
+      (JAVA_VENDOR_IDS as readonly string[]).includes(parsedConfig.defaultVendor)
+      ? parsedConfig.defaultVendor
+      : 'temurin',
+  );
+  if (parsedConfig.mirror && typeof parsedConfig.mirror === 'object') {
+    for (const [id, v] of Object.entries(parsedConfig.mirror)) {
+      if (typeof v === 'string' && v.length > 0) config.mirror[id] = v;
+    }
+  }
+  if (parsedConfig.npmRegistries && typeof parsedConfig.npmRegistries === 'object') {
+    for (const [id, v] of Object.entries(parsedConfig.npmRegistries)) {
+      if (typeof v === 'string' && v.length > 0) config.npmRegistries[id] = v;
+    }
+  }
+  if (parsedConfig.mavenRegistries && typeof parsedConfig.mavenRegistries === 'object') {
+    for (const [id, v] of Object.entries(parsedConfig.mavenRegistries)) {
+      if (typeof v === 'string' && v.length > 0) config.mavenRegistries[id] = v;
+    }
+  }
+  if (typeof parsedConfig.mavenSettings === 'string') {
+    config.mavenSettings = parsedConfig.mavenSettings.trim();
+  }
+  return config;
 }
 
 export function saveConfig(config: SdkvmConfig): void {

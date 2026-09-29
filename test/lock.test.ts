@@ -73,4 +73,31 @@ describe('lock', () => {
     fs.writeFileSync(path.join(home, '.lock', 'info.json'), JSON.stringify({ pid: child.pid }));
     expect(() => acquireLock()).not.toThrow();
   });
+
+  it('stale steal clears a leftover .lock.stale-<pid> staging dir (pid reuse)', () => {
+    // 持有者已死 + 本 pid 名下残留 staging（上次偷锁后进程死在 rename 与 rm 之间）：
+    // rename 目标非空会持续 ENOTEMPTY，绝不能因此无限重试
+    acquireLock();
+    releaseLock();
+    fs.mkdirSync(path.join(home, '.lock'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.lock', 'info.json'), JSON.stringify({ pid: 999999 }));
+    const staging = path.join(home, `.lock.stale-${process.pid}`);
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(staging, 'info.json'), '{}');
+    const past = new Date(Date.now() - 6 * 60 * 1000);
+    fs.utimesSync(path.join(home, '.lock'), past, past);
+    expect(() => acquireLock()).not.toThrow();
+    expect(fs.existsSync(staging)).toBe(false);
+    expect(fs.existsSync(path.join(home, '.lock'))).toBe(true);
+  });
+
+  it('sweeps dead-pid .lock.stale-* leftovers while holding the lock', () => {
+    acquireLock();
+    const deadStaging = path.join(home, '.lock.stale-999999');
+    fs.mkdirSync(deadStaging, { recursive: true });
+    releaseLock();
+    // 重新获取（正常路径）时应顺手清掉死 pid 的残留
+    acquireLock();
+    expect(fs.existsSync(deadStaging)).toBe(false);
+  });
 });

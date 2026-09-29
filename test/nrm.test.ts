@@ -212,3 +212,44 @@ describe('nrm test', () => {
     expect(lines[0]).toContain('npm');
   });
 });
+
+describe('nrm del 当前源回退', () => {
+  it('删除当前使用中的源时回退官方 npm 并警告', async () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    nrmAdd('gone', 'http://xxx/gone');
+    const calls: string[][] = [];
+    const npmRun = vi.fn(async (args: string[]) => {
+      calls.push(args);
+      if (args[1] === 'get') return { stdout: 'http://xxx/gone/\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    });
+    await nrmDel('gone', npmRun);
+    expect(loadConfig().npmRegistries.gone).toBeUndefined();
+    const set = calls.find((c) => c[0] === 'config' && c[1] === 'set');
+    expect(set?.[3]).toBe('https://registry.npmjs.org/');
+  });
+
+  it('删除非当前源时不改 npm 配置', async () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    nrmAdd('other', 'http://xxx/other');
+    const npmRun = vi.fn(async (args: string[]) =>
+      args[1] === 'get' ? { stdout: 'https://registry.npmjs.org/\n', stderr: '' } : { stdout: '', stderr: '' },
+    );
+    await nrmDel('other', npmRun);
+    expect(npmRun.mock.calls.filter((c) => c[0][1] === 'set')).toHaveLength(0);
+  });
+
+  it('npm 不可用时删除仍完成，仅警告回退失败', async () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    nrmAdd('gone2', 'http://xxx/gone2');
+    const npmRun = vi.fn(async () => {
+      throw new Error('npm missing');
+    });
+    await expect(nrmDel('gone2', npmRun)).resolves.toBeUndefined();
+    expect(loadConfig().npmRegistries.gone2).toBeUndefined();
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('could not reset'))).toBe(true);
+  });
+});

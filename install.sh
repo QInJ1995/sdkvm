@@ -159,11 +159,31 @@ ensure_path_rc() {
     *) return 1 ;;
   esac
 
+  # rc 是符号链接（dotfiles 管理）时写真实目标，mv 顶掉链接会破坏管理结构
+  link_iters=0
+  while [ -L "$rc" ]; do
+    target=$(readlink "$rc") || { return 1; }
+    case "$target" in
+      /*) rc=$target ;;
+      *) rc=$(dirname "$rc")/$target ;;
+    esac
+    link_iters=$((link_iters + 1))
+    [ "$link_iters" -ge 8 ] && return 1
+  done
+
   # rc 里尽量用 $HOME 相对路径，便于搬家
   case "$BIN_DIR" in
-    "$HOME"/*) path_ref="\$HOME/${BIN_DIR#"$HOME"/}" ;;
-    *) path_ref=$BIN_DIR ;;
+    "$HOME"/*) rel=${BIN_DIR#"$HOME"/}; path_ref="\$HOME/$rel" ;;
+    *) rel=$BIN_DIR; path_ref=$BIN_DIR ;;
   esac
+  # 路径里出现 " ` $ ' 或换行时无法安全内插进 rc 的 case/export 行
+  # （PATH 值会被展开执行）：放弃自动写入，退回手动提示
+  nl='
+'
+  case "$rel" in *"$nl"*) return 1 ;; esac
+  if printf '%s' "$rel" | grep -q '["`$'"'"']'; then
+    return 1
+  fi
 
   begin='# >>> sdkvm path >>>'
   end='# <<< sdkvm path <<<'

@@ -11,6 +11,10 @@ $NodeDist = if ($env:SDKVM_NODE_DIST) { $env:SDKVM_NODE_DIST.TrimEnd('/') } else
 $ReleaseBase = if ($env:SDKVM_RELEASE_BASE) { $env:SDKVM_RELEASE_BASE.TrimEnd('/') } else { 'https://github.com/QInJ1995/sdkvm/releases' }
 $Root = if ($env:SDKVM_HOME) { $env:SDKVM_HOME } else { Join-Path $env:USERPROFILE '.sdkvm' }
 $BinDir = Join-Path $Root 'bin'
+# ROOT 会被内插进 cmd.exe shim（set "ROOT=..."）——含 cmd 元字符或控制字符时无法安全嵌入
+if ($Root -match '["%&^\x00-\x1f]') {
+  throw "sdkvm: SDKVM_HOME cannot contain \`", %, &, ^ or control characters: $Root"
+}
 
 # Prefer the machine arch under WOW64 (32-bit PowerShell on 64-bit Windows)
 $procArch = $env:PROCESSOR_ARCHITECTURE
@@ -46,9 +50,11 @@ function Get-ExpectedHash([string]$sumsPath, [string]$fileName) {
 }
 
 # Remove a directory junction without following into the target (PS 5.x Remove-Item risk).
+# .NET 非递归删除对 reparse point 只摘链接本身、不进目标内容；也不再经 cmd.exe，
+# 路径里不需要转义任何 cmd 元字符。
 function Remove-Junction([string]$path) {
   if (-not (Test-Path -LiteralPath $path)) { return }
-  cmd.exe /c "rmdir `"$path`""
+  [System.IO.Directory]::Delete($path)
   if (Test-Path -LiteralPath $path) {
     throw "sdkvm: failed to remove junction $path"
   }

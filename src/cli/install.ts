@@ -9,10 +9,10 @@ import { envGet } from '../core/env.js';
 import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { getVendor, resolveVendorId } from '../vendor/index.js';
-import { applyMirrorDetail, checksumSidecarFallback, MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
+import { applyMirrorDetail, MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
 import { downloadFile, cacheFileName } from '../net/download.js';
 import { HttpError } from '../net/http.js';
-import { hashFile, verifyChecksum } from '../net/checksum.js';
+import { hashFile, preflightChecksum, verifyChecksum } from '../net/checksum.js';
 import { extractArchive, tmpExtractDir } from '../fs/extract.js';
 import { assertInstallerPrefix, runSilentInstaller } from '../fs/installer.js';
 import { assertContained, normalizeExtracted } from '../fs/layout.js';
@@ -67,6 +67,30 @@ function removeBackupQuietly(bak: string): void {
   }
 }
 
+/**
+ * 处理被硬中断（kill -9/断电）的 sh/exe 安装：安装器直接写 finalDir，半成品目录
+ * 会被 existsSync 误判成"已安装"。按 .incomplete 标记恢复 .bak 里的旧安装或清掉半成品。
+ */
+function recoverInterrupted(finalDir: string): void {
+  const incomplete = `${finalDir}.incomplete`;
+  if (!fs.existsSync(incomplete)) return;
+  const bak = `${finalDir}.bak`;
+  const name = path.basename(finalDir);
+  try {
+    if (fs.existsSync(bak)) {
+      fs.rmSync(finalDir, { recursive: true, force: true });
+      fs.renameSync(bak, finalDir);
+      log.warn(`recovered the previous ${name} after an interrupted install`);
+    } else {
+      fs.rmSync(finalDir, { recursive: true, force: true });
+      log.warn(`removed the interrupted install of ${name}; reinstalling`);
+    }
+    fs.rmSync(incomplete, { force: true });
+  } catch (err) {
+    log.warn(`could not clean up the interrupted install of ${name}: ${(err as Error).message}`);
+  }
+}
+
 export async function installCommand(
   type: SdkTypeId,
   specInput: string,
@@ -83,6 +107,10 @@ export async function installCommand(
   const resolved = await vendor.resolve(spec, platform);
   const mirrorRoot = envGet('SDKVM_MIRROR') ?? config.mirror[vendorId] ?? null;
   const { artifact, applied } = applyMirrorDetail(resolved, platform, mirrorRoot);
+  if (applied && /^http:\/\//i.test(mirrorRoot ?? '')) {
+    // 明文镜像只丢机密性（完整性仍由官方源哈希兜底），但用户应当知情
+    log.warn(`mirror root is plain http:// — downloads from it are not encrypted`);
+  }
   if (mirrorRoot?.trim() && !applied) {
     if (!MIRROR_REWRITE_VENDORS.has(vendorId)) {
       log.warn(
@@ -100,6 +128,8 @@ export async function installCommand(
 
   await withLock(async () => {
     ensureLayout();
+    // sh/exe 安装器直接写 finalDir：上次被硬中断的半成品不能当"已安装"放行
+    recoverInterrupted(finalDir);
     if (fs.existsSync(finalDir)) {
       if (!opts.force) {
         log.warn(`${artifact.displayName} is already installed`);
@@ -118,6 +148,12 @@ export async function installCommand(
     if (artifact.archive === 'sh' || artifact.archive === 'exe') {
       assertInstallerPrefix(finalDir, platform.os);
     }
+
+    // 安装器（sh/exe）下载后要以用户权限执行：无论是否走镜像，都必须有可核对的哈希。
+    // 走镜像时同样严格：期望哈希只能来自官方源（checksum.ts 不再接受镜像旁路）
+    const strict = applied || artifact.archive === 'sh' || artifact.archive === 'exe';
+    // strict 且哈希还要事后取时先取：官方校验源不通就别白下载几百 MB
+    const prefetched = await preflightChecksum(artifact, strict);
 
     const dest = path.join(paths.cache(), cacheFileName(artifact.downloadUrl));
     const progress = createProgress(`↓ ${artifact.displayName}`);
@@ -138,21 +174,20 @@ export async function installCommand(
 
     const actual =
       artifact.checksum?.kind === 'sha512' ? await hashFile(dest, 'sha512') : dl.sha256;
-    const fallbackUrl = applied
-      ? checksumSidecarFallback(resolved.downloadUrl, resolved.checksum?.url, artifact.downloadUrl)
-      : undefined;
-    // 安装器（sh/exe）下载后要以用户权限执行：无论是否走镜像，都必须有可核对的哈希
-    const strict = applied || artifact.archive === 'sh' || artifact.archive === 'exe';
 
     const bak = `${finalDir}.bak`;
     try {
-      await verifyChecksum(artifact, actual, { strict, fallbackUrl, file: dest });
+      await verifyChecksum(artifact, actual, { strict, file: dest, prefetched });
       if (artifact.archive === 'sh' || artifact.archive === 'exe') {
         // 安装器把 prefix 写进 shebang / conda-meta。先装到临时目录再改名会留下错误路径。
+        // 目录名旁的 .incomplete 标记用于识别被硬中断（kill -9/断电）的半成品：
+        // 安装器直接写 finalDir，没有 tmp+rename 的原子性
+        const incomplete = `${finalDir}.incomplete`;
         const existed = fs.existsSync(finalDir);
         let moved = false;
         try {
           fs.rmSync(bak, { recursive: true, force: true });
+          fs.writeFileSync(incomplete, String(Date.now()));
           if (existed) {
             fs.renameSync(finalDir, bak);
             moved = true;
@@ -165,6 +200,7 @@ export async function installCommand(
               hint: `expected the prefix itself, found ${normalized.root}`,
             });
           }
+          fs.rmSync(incomplete, { force: true });
           removeBackupQuietly(bak);
         } catch (err) {
           if (moved || !existed) {

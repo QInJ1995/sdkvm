@@ -147,6 +147,22 @@ function numericPairwise(a: string | null, b: string | null): number {
 
 /** 同 vendor 内比较；major → minor → patch（null 视为 0）→ extra → build 数值分段 */
 export function compareVersions(a: SdkVersion, b: SdkVersion): number {
+  // 跨发行版 JDK 8 编码不一致：Corretto 把 update 放 minor（8.504.01.1，build 在 extra），
+  // Temurin/Zulu 放 patch（8.0.504+1，build 在 build）。混合比较时先统一成 update，
+  // 否则 minor 504 vs 0 会先分胜负，任何 Corretto 8 都压过更高 update 的 Temurin/Zulu 8
+  if (a.major === 8 && b.major === 8 && (a.minor === 0) !== (b.minor === 0)) {
+    const ua = a.minor > 0 ? a.minor : a.patch ?? 0;
+    const ub = b.minor > 0 ? b.minor : b.patch ?? 0;
+    if (ua !== ub) return ua - ub > 0 ? 1 : -1;
+    // 平手比 build：Corretto 的 build 在 extra（"8.504.01.1" 的末段 1）
+    const jdk8Build = (v: SdkVersion): number => {
+      const raw = v.build ?? (/^\d+$/.test(v.extra ?? '') ? v.extra : null);
+      return raw == null ? 0 : Number(raw);
+    };
+    const ba = jdk8Build(a);
+    const bb = jdk8Build(b);
+    return ba === bb ? 0 : ba > bb ? 1 : -1;
+  }
   for (const key of ['major', 'minor'] as const) {
     if (a[key] !== b[key]) return a[key] - b[key] > 0 ? 1 : -1;
   }
@@ -212,6 +228,14 @@ export interface UserSpec {
 }
 
 /** java 版本语法：21 / lts / 21.0.5 / 21.0.5+11，可带 vendor 前缀 */
+/** 用户输入常带 v / go 前缀（node --version、go version 的输出直接粘贴）：剥掉再解析 */
+function stripUserPrefix(s: string, ...prefixes: string[]): string {
+  for (const p of prefixes) {
+    if (s.startsWith(p) && /\d/.test(s[p.length] ?? '')) return s.slice(p.length);
+  }
+  return s;
+}
+
 export function parseUserSpec(input: string): UserSpec {
   let s = input.trim().toLowerCase();
   let vendor: VendorId | undefined;
@@ -220,6 +244,7 @@ export function parseUserSpec(input: string): UserSpec {
     vendor = m[1];
     s = m[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'lts' || s === '--lts') return { vendor, spec: { kind: 'lts' } };
   // 旧式 1.x 写法：1.8 即 8；更细的旧式（1.8.0_392 / 1.8+11）给出现代写法提示
   const legacy = /^1\.(\d+)([._+].*)?$/.exec(s);
@@ -278,6 +303,7 @@ export function parseGoUserSpec(input: string): UserSpec {
     vendor = m[1];
     s = m[2];
   }
+  s = stripUserPrefix(s, 'go', 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (/^\d+\.\d+\.\d+$/.test(s)) return { vendor, spec: { kind: 'full', version: s } };
   const line = /^(\d+)\.(\d+)$/.exec(s);
@@ -390,6 +416,7 @@ export function parseNodeUserSpec(input: string): UserSpec {
     vendor = 'nodejs';
     s = m[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (s === 'lts' || s === '--lts') return { vendor, spec: { kind: 'lts' } };
   if (/^\d+\.\d+\.\d+$/.test(s)) return { vendor, spec: { kind: 'full', version: s } };

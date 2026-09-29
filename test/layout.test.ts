@@ -113,3 +113,32 @@ describe('assertContained 符号链接前缀', () => {
     expect(() => assertContained(viaLink, path.join(viaLink, 'bundle', 'Home'))).not.toThrow();
   });
 });
+
+describe('assertContained 悬空符号链接词法基', () => {
+  it('包内悬空链接通过，即使解压根路径含符号链接组件（/var → /private/var 回归）', () => {
+    // 自造符号链接前缀，避免依赖宿主 tmpdir 的实际拼写
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-lay-real-'));
+    const via = path.join(os.tmpdir(), `sdkvm-lay-link-${path.basename(real)}`);
+    fs.symlinkSync(real, via);
+    try {
+      fs.symlinkSync('sub/missing', path.join(via, 'dangling'));
+      expect(() => assertContained(via, via)).not.toThrow();
+    } finally {
+      fs.rmSync(real, { recursive: true, force: true });
+      fs.rmSync(via, { force: true });
+    }
+  });
+
+  it('词法基放行不等于放过真实逃逸：../.. 仍然拒绝', () => {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-esc-real-'));
+    const via = path.join(os.tmpdir(), `sdkvm-esc-link-${path.basename(real)}`);
+    fs.symlinkSync(real, via);
+    try {
+      fs.symlinkSync('../../outside', path.join(via, 'esc'));
+      expect(() => assertContained(via, via)).toThrow(/symlink points outside/);
+    } finally {
+      fs.rmSync(real, { recursive: true, force: true });
+      fs.rmSync(via, { force: true });
+    }
+  });
+});

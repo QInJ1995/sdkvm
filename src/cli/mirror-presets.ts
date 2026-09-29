@@ -128,6 +128,9 @@ export function parseMirrorRootUrl(url: string): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`invalid URL protocol: ${parsed.protocol}`);
   }
+  if (parsed.username || parsed.password) {
+    throw new Error('mirror URL cannot include a username or password');
+  }
   return trimmed.replace(/\/+$/, '');
 }
 

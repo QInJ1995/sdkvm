@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseMavenVersion } from '../src/core/version.js';
 import { mavenSdk } from '../src/sdk/maven.js';
-import { applyMirror, checksumSidecarFallback } from '../src/vendor/mirror.js';
+import { applyMirror } from '../src/vendor/mirror.js';
 import { mavenVendor } from '../src/vendor/maven.js';
 import type { ResolvedArtifact } from '../src/vendor/types.js';
 
@@ -137,14 +137,6 @@ describe('applyMirror maven', () => {
 
   it('no mirror → untouched', () => {
     expect(applyMirror(artifact(), MAC, null).downloadUrl).toBe(url);
-  });
-
-  it('points the sha512 sidecar at the same mirror path as the archive', () => {
-    const mirrored = applyMirror(artifact(), MAC, 'https://maven.aliyun.com/repository/central');
-    expect(checksumSidecarFallback(url, `${url}.sha512`, mirrored.downloadUrl)).toBe(
-      `${mirrored.downloadUrl}.sha512`,
-    );
-    expect(checksumSidecarFallback(url, `${url}.sha512`, url)).toBeUndefined();
   });
 });
 

@@ -62,6 +62,15 @@ describe('registry', () => {
     expect(findInstalled('java', '21.0.5').dirPath.endsWith('temurin-21.0.5+11')).toBe(true);
   });
 
+  it('X.0 / X.0.0 折叠显示的目录仍可被完整输入命中', () => {
+    // formatVersion 把 21.0 / 21.0.0 折叠成 "21"：输入 "21.0" 不能因此失配
+    mkJdk('temurin-21');
+    expect(findInstalled('java', '21.0').dirPath.endsWith('temurin-21')).toBe(true);
+    expect(findInstalled('java', '21.0.0').dirPath.endsWith('temurin-21')).toBe(true);
+    // 折叠不影响真正的 21.x：21.5 不命中 21
+    expect(() => findInstalled('java', '21.5')).toThrow(/matches "21\.5"/);
+  });
+
   it('lts match', () => {
     mkJdk('temurin-21.0.5+11');
     mkJdk('temurin-22.0.1+2');

@@ -29,3 +29,27 @@ describe('httpFetch redirect downgrade guard', () => {
     await expect(httpText('https://origin.example/x')).resolves.toBe('{"ok":1}');
   });
 });
+
+describe('body 读取重试', () => {
+  it('res.text() 中途失败会重试整个请求', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          const bad = new Response('partial');
+          Object.defineProperty(bad, 'text', {
+            value: async () => {
+              throw new TypeError('aborted');
+            },
+          });
+          return bad;
+        }
+        return new Response('ok');
+      }),
+    );
+    await expect(httpText('https://retry.example/x')).resolves.toBe('ok');
+    expect(calls).toBe(2);
+  });
+});

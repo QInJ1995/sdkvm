@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { paths } from './paths.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
@@ -47,6 +48,9 @@ let heartbeatFailures = 0;
 function touchLock(): void {
   const lockDir = paths.lock();
   if (!fs.existsSync(lockDir)) return;
+  // 锁可能已被别人按 stale 偷走：心跳只续自己的锁，不替新持有者刷新 mtime
+  //（否则新持有者真挂了，它的锁也永远不到 STALE_MS，第三个进程会一直等）
+  if (readLockPid() !== process.pid) return;
   const now = new Date();
   let mtimeOk = false;
   try {
@@ -56,19 +60,14 @@ function touchLock(): void {
     // ignore
   }
   try {
-    // 只在锁目录明确归属自己时刷新 info.json：holder 未知（info.json 缺失/损坏）时
-    // 贸然写入会把别人的锁据为己有，等 STALE_MS 让等待者按 stale 处理更安全。
-    const pid = readLockPid();
-    if (pid === process.pid) {
-      let startedAt = Date.now();
-      try {
-        const raw = JSON.parse(fs.readFileSync(lockInfoPath(), 'utf8')) as { startedAt?: number };
-        if (typeof raw.startedAt === 'number') startedAt = raw.startedAt;
-      } catch {
-        // rewrite below
-      }
-      writeLockInfo(startedAt);
+    let startedAt = Date.now();
+    try {
+      const raw = JSON.parse(fs.readFileSync(lockInfoPath(), 'utf8')) as { startedAt?: number };
+      if (typeof raw.startedAt === 'number') startedAt = raw.startedAt;
+    } catch {
+      // rewrite below
     }
+    writeLockInfo(startedAt);
   } catch {
     // ignore
   }
@@ -91,50 +90,94 @@ function removeLockDir(dir: string): void {
 /**
  * 偷锁必须原子：先把锁目录 rename 成自己的暂存名，只有唯一赢家（其余 ENOENT），
  * 再由赢家清理暂存目录。直接 rmSync + mkdir 的话，两个等待者可以先后删掉彼此的新锁。
+ * 返回 false 仅表示锁目录已不在（被抢先偷走 / 持有者刚释放），上层可以重取；
+ * 持续性失败（staging 撞残留目录、权限）直接抛错，绝不能让上层无限重试。
  */
 function stealLock(lockDir: string): boolean {
   const staging = `${lockDir}.stale-${process.pid}`;
+  // 同名 staging 只可能来自复用了本 pid 的已死进程（活着的话 pid 唯一不会撞名）：
+  // 先清掉，否则 rename 会因目标非空持续 ENOTEMPTY
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // 清不掉会在下面 rename 时以明确错误暴露
+  }
   try {
     fs.renameSync(lockDir, staging);
-  } catch {
-    // 锁已被其他等待者偷走或持有者刚释放：回到上层重取
-    return false;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    // 源不在了：被其他等待者抢先偷走或持有者刚释放，回到上层重取
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return false;
+    throw new SdkvmError(`Cannot clear the stale lock at ${lockDir}`, {
+      hint: `${(err as Error).message}. Close other sdkvm processes, then remove the directory manually.`,
+    });
   }
   removeLockDir(staging);
   return true;
+}
+
+/**
+ * 清理历史偷锁残留的 `.lock.stale-<pid>` 目录（偷到后 rm 失败、或进程死在
+ * rename 与 rm 之间）。只在持有锁时调用；staging 主人还活着就跳过——它正要自己删。
+ */
+function sweepStaleStaging(lockDir: string): void {
+  const root = paths.root();
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(`${path.basename(lockDir)}.stale-`)) continue;
+    const pid = Number(name.slice(name.lastIndexOf('.stale-') + '.stale-'.length));
+    if (Number.isInteger(pid) && isProcessAlive(pid)) continue;
+    try {
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+    } catch {
+      // 清不掉就留着，不影响本次持锁
+    }
+  }
 }
 
 /** mkdir 原子锁：防止并发 install/uninstall 写冲突 */
 export function acquireLock(): void {
   const lockDir = paths.lock();
   fs.mkdirSync(paths.root(), { recursive: true });
-  try {
-    fs.mkdirSync(lockDir);
-    writeLockInfo(Date.now());
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    if (e.code === 'EEXIST') {
+  // 竞态重试（持有者恰好退出、锁被别的等待者抢先偷走）有界进行：
+  // 持续失败说明环境性问题，无限递归只会栈溢出
+  let transient = 0;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      writeLockInfo(Date.now());
+      sweepStaleStaging(lockDir);
+      return;
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code !== 'EEXIST') throw e;
       const holder = readLockPid();
-      if (holder != null && !isProcessAlive(holder)) {
-        stealLock(lockDir);
-        return acquireLock();
+      let stale = holder != null && !isProcessAlive(holder);
+      if (!stale) {
+        try {
+          stale = Date.now() - fs.statSync(lockDir).mtimeMs > STALE_MS;
+        } catch {
+          stale = true; // 锁目录恰好消失（持有者刚释放或已被清走）：直接重取
+        }
       }
-      // 持有者可能恰好在此期间退出（或另一个等待者已清走锁）：锁没了就直接重取
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(lockDir);
-      } catch {
-        return acquireLock();
+      if (!stale) {
+        throw new SdkvmError('Another sdkvm operation is in progress', {
+          hint: 'If this is wrong, remove ~/.sdkvm/.lock manually.',
+        });
       }
-      if (Date.now() - stat.mtimeMs > STALE_MS) {
-        stealLock(lockDir);
-        return acquireLock();
+      if (stealLock(lockDir)) continue; // 偷到了，下一轮 mkdir 应当成功
+      transient += 1;
+      if (transient > 10) {
+        throw new SdkvmError(`Cannot acquire the lock at ${lockDir}`, {
+          hint: 'The lock directory keeps changing under us — another sdkvm may be racing this one. Retry in a moment.',
+        });
       }
-      throw new SdkvmError('Another sdkvm operation is in progress', {
-        hint: 'If this is wrong, remove ~/.sdkvm/.lock manually.',
-      });
     }
-    throw e;
   }
 }
 

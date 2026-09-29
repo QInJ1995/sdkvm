@@ -61,14 +61,19 @@
 
 - 七类 SDK、三个 JDK 发行版(Temurin / Zulu / Corretto)统一管理。
 - 版本规格支持 `lts`、`latest`、大版本线、精确版本与厂商前缀,`install`、`use`、
-  `uninstall` 三条命令共用同一套语法。
+  `uninstall` 三条命令共用同一套语法;容忍 `v` / `go` 前缀,可直接粘贴
+  `node --version`、`go version` 的输出。
 - 跨平台:macOS(Apple Silicon / Intel)、主流 Linux(x64 / aarch64)、Windows 10+。
   Windows 上使用 junction 与 `REG_EXPAND_SZ` 用户环境变量,规避 `setx` 截断。
-- 完整性校验:归档在下载过程中流式计算 SHA-256,与官方清单比对;Maven 校验官方
-  SHA-512(旧版本回退 SHA-1);走镜像或执行安装器时强制要求可核对的哈希。
+- 完整性校验:归档在下载过程中流式计算 SHA-256,与官方清单比对;期望哈希只取自
+  官方源——镜像旁路文件与归档同受镜像控制,不作为校验依据;走镜像或执行安装器时
+  强制要求官方可核对的哈希,取不到会在**下载前**失败,不白下载。Maven 校验官方
+  SHA-512(旧版本回退 SHA-1)。
 - 下载加速:内置国内镜像站(nju / tuna / aliyun / huawei / ustc),按 SDK 类型独立配置;
   另含 npm registry(`nrm`)与 Maven 依赖镜像(`mrm`)两套独立的管理命令。
-- 原子安装:先解压到临时目录并校验目录结构,再一次性落位;校验失败或中断不残留文件。
+- 原子安装:先解压到临时目录并校验目录结构,再一次性落位;校验失败或中断不残留文件;
+  安装器类归档(Miniconda)以 `.incomplete` 标记跟踪,被硬中断的半成品在下次安装时
+  自动恢复旧版或清除重装。
 - 并发安全:安装、切换、卸载、升级共用排他文件锁,进程存活探测加心跳,崩溃后自动恢复。
 - 免预装 Node.js:官方安装脚本自带隔离运行时,数据与入口集中在 `SDKVM_HOME`。
 
@@ -76,7 +81,7 @@
 
 | SDK | 来源 | 版本能力 | 说明 |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu 只选 glibc 构建(musl 变体不参与匹配) |
+| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu 按宿主 libc 匹配——glibc 主机选 glibc 构建,Alpine/musl 主机选 musl 变体 |
 | Go | [go.dev/dl](https://go.dev/dl/) | 全历史稳定版 | `latest`、`1.24`、`1.24.5` |
 | Flutter | 官方发布清单 | stable / beta | macOS 双架构;Linux / Windows 仅 x64;beta 需完整 prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts`(当前 24 Krypton)/ `latest` / major 线 / 精确版本 | npm 随所选版本一起切换 |
@@ -435,7 +440,8 @@ sdkvm nrm test
 
 内置名:`npm`、`yarn`、`taobao`(别名 `npmmirror`)、`tencent`、`cnpm`、`huawei`、`npmMirror`。
 `custom` 是保留名,`add` 拒绝使用;`test` 并发探测所有源,仅当全部失败时才以
-非零码退出(单个源失败只影响该行输出)。
+非零码退出(单个源失败只影响该行输出)。`del` 删除的恰是当前使用中的源时,自动把
+registry 回退到官方 npm,避免 `.npmrc` 悬空指向已删地址。
 
 ### `sdkvm mrm <command>`
 
@@ -479,7 +485,11 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 - 路径不是 Maven 默认位置时,`use` 会提示需要 `mvn -s <path>`。
 - 写入采用临时文件加原子替换,并与其它 sdkvm 写操作共用文件锁。
 - `custom` 是保留名,`add` 拒绝使用;`test` 仅当所有源都失败时才以非零码退出。
-- 标记块不配对(手工编辑残留)时拒绝操作并提示先修复。
+- 标记块不配对(手工编辑残留)时拒绝操作并提示先修复。标记以**独占一行**的注释为
+  界;文件中行内出现的相同文本不属于标记,不会被当作块边界吞掉。
+- `del` 删除的恰是当前生效的镜像时,自动移除标记块回退官方源。
+- settings.xml 不是合法 UTF-8(如 GBK 注释)时,写入前先把原文件备份为
+  `settings.xml.sdkvm-bak`,不做不可逆的编码改写。
 
 ### `sdkvm version` 与 `sdkvm upgrade`
 
@@ -509,6 +519,10 @@ SDK 与配置不受影响。升级过程持有文件锁。
 | `<vendor>-…` | 限定发行版 | 同左 | 同左 | 同左 | 同左 | 同左 | 同左 | `zulu-21`、`maven-3.9.9`、`cpython-3.12.7` |
 
 ### 各 SDK 规则
+
+所有 SDK 的版本输入都容忍 `v` 前缀;Go 额外容忍 `go` 前缀(`go1.24.3` 等价于
+`1.24.3`)。JDK 8 的跨发行版排序按统一后的 update 号比较(Corretto `8.504.01.1`
+与 Temurin `8.0.504+1` 视为同一 update)。
 
 - **Java**:`lts` 与 Adoptium 列表对齐,当前为 8 / 11 / 17 / 21 / 25。`21.0.5`
   按前缀匹配,可命中 `21.0.5+11`。接受旧式 major 写法:`1.8` 等价于 `8`;
@@ -585,8 +599,10 @@ Flutter 数 GB(压缩包约 1–2.2 GB)。
 **macOS / Linux**:`current-*` 是指向当前版本目录的符号链接。首次 `use` 向
 shell 配置追加带标记的初始化块:zsh 写入 `~/.zshrc`,bash 写入 `~/.bash_profile`
 (macOS)或 `~/.bashrc`(其它系统)。七种 SDK 各一块,写入前会检测原有内容编码,
-非常规 UTF-8 内容先备份。Miniconda 的块还会 source `conda.sh`,使 `conda activate`
-可用。Python 与 Miniconda 都切换后,后写入的块在 `PATH` 上靠前。
+非常规 UTF-8 内容先备份。标记以**独占一行**的注释为界——文件中行内出现的相同
+文本不属于标记,不会被当作块边界处理。Miniconda 的块还会 source `conda.sh`,使
+`conda activate` 可用(fish 下改为导出 `CONDA_EXE` 等变量并提示 `conda init fish`)。
+Python 与 Miniconda 都切换后,后写入的块在 `PATH` 上靠前。
 
 ```sh
 # >>> sdkvm java init >>>

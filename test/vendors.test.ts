@@ -479,3 +479,43 @@ describe('zulu listMajors', () => {
     await expect(zulu.listMajors()).rejects.toThrow(/all majors/);
   });
 });
+
+describe('zulu libc 过滤', () => {
+  // 本机（mac/windows）与 glibc Linux 都视为 glibc：musl 变体必须被排除
+  it('glibc 宿主跳过 musl 变体（沿用既有行为）', async () => {
+    const mixed = [
+      {
+        name: 'zulu21.52.203-ca-jdk21.0.12.1-linux_musl_x64.tar.gz',
+        download_url: 'https://cdn.azul.com/zulu/bin/musl.tar.gz',
+        java_version: [21, 0, 12, 1],
+        distro_version: [21, 52, 203, 0],
+        sha256_hash: 'ee'.repeat(32),
+      },
+      {
+        name: 'zulu21.52.203-ca-jdk21.0.12.1-linux_x64.tar.gz',
+        download_url: 'https://cdn.azul.com/zulu/bin/glibc.tar.gz',
+        java_version: [21, 0, 12, 1],
+        distro_version: [21, 52, 203, 0],
+        sha256_hash: 'ff'.repeat(32),
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => resJson(mixed)));
+    const a = await zulu.resolve({ kind: 'major', major: 21 }, LIN);
+    expect(a.downloadUrl).toBe('https://cdn.azul.com/zulu/bin/glibc.tar.gz');
+  });
+
+  it('只有 musl 构建时（glibc 宿主）给出无匹配错误而不是选中 musl', async () => {
+    const muslOnly = [
+      {
+        name: 'zulu21.52.203-ca-jdk21.0.12.1-linux_musl_x64.tar.gz',
+        download_url: 'https://cdn.azul.com/zulu/bin/musl.tar.gz',
+        java_version: [21, 0, 12, 1],
+        distro_version: [21, 52, 203, 0],
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => resJson(muslOnly)));
+    await expect(zulu.resolve({ kind: 'major', major: 21 }, LIN)).rejects.toThrow(
+      /No Zulu JDK build matches/,
+    );
+  });
+});

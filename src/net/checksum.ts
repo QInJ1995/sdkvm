@@ -84,17 +84,14 @@ export function hashFile(file: string, algorithm: ChecksumKind): Promise<string>
 
 export interface VerifyChecksumOptions {
   /**
-   * 严格模式（走镜像下载时开启）：官方与镜像旁路都拿不到校验值时硬失败，
-   * 避免无法核对的镜像包被静默放行。哈希不匹配始终硬失败。
+   * 严格模式（走镜像下载、或归档是安装器时开启）：官方校验源拿不到哈希时硬失败，
+   * 避免无法核对的包被静默放行。哈希不匹配始终硬失败。
    */
   strict?: boolean;
-  /**
-   * 官方校验 URL 失败或没有有效哈希时再试一次。
-   * 通常是镜像上与归档同路径的旁路文件（`.sha512` / `.json`）。
-   */
-  fallbackUrl?: string;
   /** 已下载的归档。SHA-512 不存在、改用 SHA-1 时用来重算哈希 */
   file?: string;
+  /** preflightChecksum 预取的官方哈希；提供时不再重复请求校验源 */
+  prefetched?: ChecksumHit | null;
 }
 
 function isNotFound(err: unknown): boolean {
@@ -112,70 +109,71 @@ interface ChecksumHit {
 }
 
 /**
- * 按顺序试校验源。404 视为「这个算法的旁路不存在」，继续下一个；
- * 网络错误才算不可达。Maven 3.8 及更早只有 .sha1，没有 .sha512。
+ * 下载前预检：strict 模式下期望哈希还要事后去官方源取（expected 为空、只有 url）时，
+ * 先取一次，取不到立即失败——否则镜像归档完整下载几百 MB 后才在 verify 阶段失败。
+ * 返回取到的哈希供 verifyChecksum 复用，避免二次请求。
+ */
+export async function preflightChecksum(
+  artifact: ResolvedArtifact,
+  strict: boolean,
+): Promise<ChecksumHit | null> {
+  const info = artifact.checksum;
+  if (!strict || !info || info.expected || !info.url) return null;
+  return loadChecksum(artifact, info.kind, info.url, true);
+}
+
+/**
+ * 只从官方校验 URL 取期望值。镜像可以提供归档，但镜像旁路（同路径 .sha512/.json）
+ * 与归档同受镜像控制，由它定义 expected 的话校验形同虚设——恶意镜像只要
+ * 同时伪造归档和旁路即可安装任意代码。官方不可达时宁可失败（strict），绝不改信镜像。
+ * 404 视为「这个算法的旁路不存在」，降级试官方 .sha1（Maven 3.8 及更早没有 .sha512）。
  */
 async function loadChecksum(
   artifact: ResolvedArtifact,
   primaryKind: ChecksumKind,
   officialUrl: string,
-  mirrorUrl: string | undefined,
   strict: boolean,
 ): Promise<ChecksumHit | null> {
-  const sameKind = [officialUrl, mirrorUrl].filter((url): url is string => Boolean(url));
   let missing = false;
   let networkErr: unknown;
-  for (let i = 0; i < sameKind.length; i++) {
-    const url = sameKind[i] as string;
-    try {
-      const expected = extractExpectedChecksum(await httpText(url), primaryKind);
-      if (expected) {
-        if (i > 0) {
-          log.warn(`official checksum unreachable for ${artifact.displayName}, verified with mirror sidecar`);
-        }
-        return { expected, kind: primaryKind };
-      }
+  try {
+    const expected = extractExpectedChecksum(await httpText(officialUrl), primaryKind);
+    if (expected) return { expected, kind: primaryKind };
+    missing = true;
+  } catch (err) {
+    if (isNotFound(err)) {
       missing = true;
-    } catch (err) {
-      if (isNotFound(err)) {
-        missing = true;
-        continue;
-      }
+    } else {
       networkErr = err;
-      if (i === 0 && mirrorUrl) {
-        log.warn(`cannot fetch official checksum for ${artifact.displayName}, trying the mirror sidecar`);
-      }
     }
   }
 
-  const sha1Urls = [sha1Sidecar(officialUrl), sha1Sidecar(mirrorUrl)].filter((url): url is string => Boolean(url));
-  if (missing && sha1Urls.length > 0) {
-    for (const url of sha1Urls) {
-      try {
-        const expected = extractExpectedChecksum(await httpText(url), 'sha1');
-        if (!expected) continue;
+  const sha1Url = sha1Sidecar(officialUrl);
+  if (missing && sha1Url) {
+    try {
+      const expected = extractExpectedChecksum(await httpText(sha1Url), 'sha1');
+      if (expected) {
         log.warn(`no ${primaryKind} sidecar for ${artifact.displayName}, verifying with sha1`);
         return { expected, kind: 'sha1' };
-      } catch (err) {
-        if (isNotFound(err)) continue;
-        networkErr = err;
       }
+    } catch (err) {
+      // 404 只说明 .sha1 也不存在；网络错误才算不可达
+      if (!isNotFound(err)) networkErr = err;
     }
   }
 
-  // 有过网络失败就不能当成「文件里没有哈希」：404 只说明这个算法的旁路不存在，
-  // 另一条 URL 连不上时仍然应该报不可达，让安装重试而不是换一套错误提示。
+  // 有过网络失败就不能当成「文件里没有哈希」：strict 下直接失败，
+  // 让安装重试或换源，而不是悄悄放过一个无法核对的包
   if (networkErr) {
     if (strict) {
       const detail = networkErr instanceof Error ? networkErr.message.split('\n')[0] : String(networkErr);
-      throw new SdkvmError(`Cannot fetch checksum for ${artifact.displayName}`, {
-        hint: `${detail}. Official and mirror checksum URLs were both unreachable.`,
+      throw new SdkvmError(`Cannot fetch the official checksum for ${artifact.displayName}`, {
+        hint: `${detail}. A mirror can serve the archive but not a trusted hash — retry when the official checksum source is reachable, or unset the mirror.`,
       });
     }
     log.warn(`cannot fetch checksum for ${artifact.displayName}, skipping verification`);
     return null;
   }
-  if (!missing) return null;
   if (strict) {
     throw new SdkvmError(`Checksum source has no valid hash for ${artifact.displayName}`, {
       hint: 'Mirrored downloads require a verifiable checksum.',
@@ -205,8 +203,8 @@ export async function verifyChecksum(
   let expected: string | null = info.expected?.toLowerCase() ?? null;
   let kind: ChecksumKind = info.kind;
   if (!expected && info.url) {
-    const fallback = opts.fallbackUrl && opts.fallbackUrl !== info.url ? opts.fallbackUrl : undefined;
-    const hit = await loadChecksum(artifact, info.kind, info.url, fallback, strict);
+    // 预检与 verify 面对同一 artifact 与官方 URL，命中即可直接复用
+    const hit = opts.prefetched ?? (await loadChecksum(artifact, info.kind, info.url, strict));
     if (!hit) return;
     expected = hit.expected;
     kind = hit.kind;

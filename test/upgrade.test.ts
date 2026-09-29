@@ -128,3 +128,10 @@ describe('windowsUpgradeScript home 校验', () => {
     expect(() => windowsUpgradeScript('C:\\sd^kvm')).toThrow(/batch/);
   });
 });
+
+describe('windowsUpgradeScript 控制字符校验', () => {
+  it('拒绝含换行/回车的 home（会提前终结 set 行）', () => {
+    expect(() => windowsUpgradeScript('C:\\sd\nkvm')).toThrow(/batch/);
+    expect(() => windowsUpgradeScript('C:\\sd\rkvm')).toThrow(/batch/);
+  });
+});

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
 import { httpFetch } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
@@ -61,6 +62,20 @@ function compareZuluPackages(a: ZuluPackage, b: ZuluPackage): number {
   return compareNumericArrays(a.distro_version, b.distro_version);
 }
 
+/**
+ * 宿主 libc（仅 linux 相关）：检测到 musl loader（Alpine 等）则 musl，否则 glibc。
+ * musl 与 glibc 构建互不兼容——按宿主选择，而不是一刀切排除 musl。
+ */
+function hostLibc(platform: VendorPlatform): 'glibc' | 'musl' {
+  if (platform.os !== 'linux') return 'glibc';
+  const markers = [
+    '/lib/ld-musl-x86_64.so.1',
+    '/lib/ld-musl-aarch64.so.1',
+    '/etc/alpine-release',
+  ];
+  return markers.some((m) => fs.existsSync(m)) ? 'musl' : 'glibc';
+}
+
 /** 客户端过滤：只要普通 ca-jdk 构建（API 的过滤参数不可靠：会漏进 crac/fx-jre） */
 function pickPlainJdk(
   packages: ZuluPackage[],
@@ -69,11 +84,13 @@ function pickPlainJdk(
 ): ZuluPackage | null {
   const ext = platform.os === 'windows' ? '.zip' : '.tar.gz';
   const wanted = versionPrefix ?? '';
+  const wantMusl = hostLibc(platform) === 'musl';
   const candidates = packages.filter((p) => {
     if (!/^zulu[\d.]+-ca-jdk[\d.]*-/i.test(p.name)) return false;
     if (!p.name.endsWith(ext)) return false;
-    // musl 变体与 glibc 同版本同排序权重，API 恰好把 musl 排在后——不排除会选中 musl
-    if (/musl/i.test(p.name)) return false;
+    // musl 变体与 glibc 同版本同排序权重，不按 libc 过滤会选错（glibc 主机选到 musl，
+    // musl 主机选到跑不起来的 glibc）
+    if (/musl/i.test(p.name) !== wantMusl) return false;
     if (wanted && !zuluVersionMatches(p.java_version, wanted)) return false;
     return true;
   });

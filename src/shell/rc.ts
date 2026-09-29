@@ -7,7 +7,6 @@ import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { CLI_BIN } from '../cli/cmdname.js';
 import { log } from '../ui/log.js';
-import { escapeRegExp as escapeRegex } from '../util/regex.js';
 
 export function rcBegin(type: SdkTypeId): string {
   return `# >>> ${CLI_BIN} ${type} init >>>`;
@@ -56,10 +55,21 @@ export function rcBlockFish(type: SdkTypeId): string {
   const binSuffix = spec.envBinSuffix(detectPlatform()).replace(/\\/g, '/');
   const abs = paths.current(type);
   const toPosix = (p: string) => p.split(path.sep).join('/');
+  // miniconda 的 rcExtra 是 bash 语法（source conda.sh），fish 不能复用：
+  // 导出等价变量并提示跑一次 conda init fish 获得 conda activate
+  const extra =
+    type === 'miniconda'
+      ? [
+          `set -gx CONDA_EXE "$${spec.envVar}/bin/conda"`,
+          `set -gx CONDA_PYTHON_EXE "$${spec.envVar}/bin/python"`,
+          `# fish 下 conda activate 需要（只需一次）: conda init fish`,
+        ]
+      : [];
   return [
     rcBegin(type),
     `set -gx ${spec.envVar} '${toPosix(abs).replace(/'/g, "'\\''")}'`,
     `fish_add_path -p $${spec.envVar}${binSuffix}`,
+    ...extra,
     rcEnd(type),
   ].join('\n');
 }
@@ -69,26 +79,47 @@ export function stripRcBlock(content: string, type: SdkTypeId): string {
   return stripBlockBetween(content, rcBegin(type), rcEnd(type));
 }
 
+/** 行首锚定：标记必须独占一行（允许首尾空白）才算 sdkvm 的块边界。
+ * 用户内容里行中出现的标记文本（echo "# >>> sdkvm java init >>>" 之类）不是边界，
+ * 按旧的正则前缀匹配会把那一行连同后续内容一起吞掉。 */
+function isMarkerLine(line: string, marker: string): boolean {
+  return line.trim() === marker;
+}
+
 function stripBlockBetween(content: string, begin: string, end: string): string {
-  const re = new RegExp(`\\n*${escapeRegex(begin)}[\\s\\S]*?${escapeRegex(end)}\\n*`, 'g');
-  let out = content.replace(re, '\n');
+  const lines = content.split('\n');
+  // 完整块：begin 行到 end 行（含）整段移除；嵌套的重复 begin 属于块内容，随块删除
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of lines) {
+    if (!skipping && isMarkerLine(line, begin)) {
+      skipping = true;
+      continue;
+    }
+    if (skipping && isMarkerLine(line, end)) {
+      skipping = false;
+      continue;
+    }
+    if (!skipping) kept.push(line);
+  }
   // 半损坏块（end 标记被删/改）：完整块已被上面清掉，剩下的 begin 必属损坏块。
   // 只删到下一个 sdkvm 块标记为止；其后没有其它标记时无法区分"块内容"与
   // 用户自己的配置，仅移除标记行本身并警告，绝不删到文件尾。
-  const idx = out.indexOf(begin);
-  if (idx >= 0) {
-    const after = out.slice(idx + begin.length);
-    const nextMarker = after.search(/\n# (?:>>>|<<<) sdkvm /);
-    if (nextMarker >= 0) {
-      out = out.slice(0, idx) + after.slice(nextMarker);
+  const beginIdx = kept.findIndex((l) => isMarkerLine(l, begin));
+  if (beginIdx >= 0) {
+    const nextMarker = kept.findIndex(
+      (l, i) => i > beginIdx && /^# (?:>>>|<<<) sdkvm /.test(l.trimStart()),
+    );
+    if (nextMarker > beginIdx) {
+      kept.splice(beginIdx, nextMarker - beginIdx);
     } else {
-      out = out.slice(0, idx) + after.replace(/^[^\n]*(\n|$)/, '');
+      kept.splice(beginIdx, 1);
       log.warn(
         `found an unterminated ${CLI_BIN} init marker in the rc file; removed the marker line only — check the file manually`,
       );
     }
   }
-  return out;
+  return kept.join('\n');
 }
 
 /** 确保文件末尾恰好包含一个该类型的标记块；返回最终文件内容 */

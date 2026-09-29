@@ -124,7 +124,9 @@ export function assertContained(destDir: string, root: string): void {
           const resolved = path.isAbsolute(target)
             ? path.resolve(target)
             : path.resolve(path.dirname(entryPath), target);
-          if (!withinReal(resolved)) {
+          // 词法 resolve 的结果带的是 destDir 的原始拼写（如 macOS 的 /var/...），
+          // 与 realpath 基（/private/var/...）拼写不同不代表越界：两个基任一命中即可
+          if (!withinReal(resolved) && !within(resolved)) {
             throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
               hint: `${target} → ${resolved}`,
             });

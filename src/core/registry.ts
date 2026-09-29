@@ -31,6 +31,8 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
     } catch {
       continue; // 扫描期间被并发卸载删除
     }
+    // 被硬中断（kill -9/断电）的 sh/exe 安装半成品：install 会按标记恢复/清理，这里不可见
+    if (fs.existsSync(`${dirPath}.incomplete`)) continue;
     result.push({ type, version, dirPath, home: spec.locateHome(dirPath) });
   }
   // 版本相同的两条（java 跨 vendor 并存）用 vendor 名决出确定序，
@@ -95,7 +97,10 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
       if (spec.matchesFull) return spec.matchesFull(j.version, v);
       const f = spec.formatVersion(j.version);
       // 反向前缀：wanted 带 build 而已装目录不带（zulu 的 build 在 distro_version，不进目录名）
-      return f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`) || v.startsWith(`${f}+`);
+      if (f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`) || v.startsWith(`${f}+`)) return true;
+      // formatVersion 会把 X.0.0 折叠成 X：目录显示 "21" 时输入 "21.0"/"21.0.0" 也应命中
+      const norm = (s: string) => (s.split('+')[0] ?? s).replace(/(\.0)+$/, '');
+      return norm(f) === norm(v);
     });
   }
 

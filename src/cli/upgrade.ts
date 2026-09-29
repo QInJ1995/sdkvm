@@ -104,9 +104,10 @@ export async function replaceCliPackage(archiveFile: string, home = sdkvmHome())
 
 /** Windows 升级脚本正文（导出便于单测）。home 含 cmd 元字符时无法安全内插，直接拒绝 */
 export function windowsUpgradeScript(home: string): string {
-  if (/["%&^]/.test(home)) {
+  // 换行/控制字符能提前终结 set 行、把后续内容当新命令执行，与 " % & ^ 同等对待
+  if (/["%&^\x00-\x1f]/.test(home)) {
     throw new SdkvmError(`sdkvm home cannot be embedded in a Windows batch script: ${home}`, {
-      hint: 'Move sdkvm to a path without \" % & ^ characters, or upgrade with: npm update -g sdkvm',
+      hint: 'Move sdkvm to a path without \", %, &, ^ or control characters, or upgrade with: npm update -g sdkvm',
     });
   }
   return [

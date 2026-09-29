@@ -193,3 +193,45 @@ describe('rc robustness', () => {
     fs.rmSync(`${file}.sdkvm-bak`, { force: true });
   });
 });
+
+describe('rc 标记行首锚定', () => {
+  it('行中出现的标记文本不当作块边界', () => {
+    const B = rcBegin('java');
+    const E = rcEnd('java');
+    const content = `export A=1\necho "keep ${B} inline" # ${E}\nexport B=2\n`;
+    const out = stripRcBlock(content, 'java');
+    expect(out).toContain('export A=1');
+    expect(out).toContain(`echo "keep ${B} inline"`);
+    expect(out).toContain('export B=2');
+  });
+
+  it('upsert 在含行中标记文本的文件上保持幂等', () => {
+    const B = rcBegin('node');
+    const content = `alias z="echo ${B}"\n`;
+    const once = upsertRcContent(content, 'node');
+    const twice = upsertRcContent(once, 'node');
+    const markerLines = (s: string) => s.split('\n').filter((l) => l.trim() === B).length;
+    expect(markerLines(once)).toBe(1);
+    expect(markerLines(twice)).toBe(1);
+    expect(twice).toContain(`alias z="echo ${B}"`);
+  });
+
+  it('重复 begin 标记按第一个 end 截断（嵌套内容随块删除）', () => {
+    const B = rcBegin('java');
+    const E = rcEnd('java');
+    const out = stripRcBlock(`export A=1\n${B}\nX\n${B}\nY\n${E}\nexport Z=1\n`, 'java');
+    expect(out).toContain('export A=1');
+    expect(out).toContain('export Z=1');
+    expect(out).not.toMatch(/^Y$/m);
+  });
+
+  it('CRLF 文件里的标记行同样识别', () => {
+    const B = rcBegin('java');
+    const E = rcEnd('java');
+    const content = `export A=1\r\n${B}\r\nexport JAVA_HOME="x"\r\n${E}\r\nexport B=2\r\n`;
+    const out = stripRcBlock(content, 'java');
+    expect(out).toContain('export A=1');
+    expect(out).toContain('export B=2');
+    expect(out).not.toContain('JAVA_HOME');
+  });
+});

@@ -85,7 +85,9 @@ async function defaultNpmRunner(args: string[]): Promise<{ stdout: string; stder
 
 /** HEAD 探测 registry；失败抛错，成功返回耗时毫秒 */
 export async function defaultRegistryProbe(url: string): Promise<number> {
-  const target = url.replace(/\/+$/, '') + '/';
+  // 经 URL 对象补尾斜杠：字符串拼接会把 '/' 加到 query 之后（?token=abc/）
+  const target = new URL(url);
+  if (!target.pathname.endsWith('/')) target.pathname += '/';
   const started = Date.now();
   const res = await fetch(target, {
     method: 'HEAD',
@@ -179,6 +181,12 @@ export function nrmAdd(name: string, url: string): void {
       hint: 'Expected http:// or https://',
     });
   }
+  if (parsed.username || parsed.password) {
+    // 明文进 ~/.npmrc 与终端回显；与 mrm add 的策略一致
+    throw new SdkvmError('Registry URL cannot include a username or password', {
+      hint: 'Put npm credentials in ~/.npmrc (_auth) or a .yarnrc.yml token, not the URL.',
+    });
+  }
   // 只规范化 pathname 尾斜杠，保留 query/hash
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') + '/';
   const normalized = parsed.href;
@@ -194,12 +202,13 @@ export function nrmAdd(name: string, url: string): void {
   log.ok(`added registry ${key} → ${normalized}`);
 }
 
-export function nrmDel(name: string): void {
+export async function nrmDel(name: string, npmRun: NpmRunner = defaultNpmRunner): Promise<void> {
   const key = name.trim();
   if (isBuiltinRegistryName(key)) {
     throw new SdkvmError(`Cannot delete built-in registry "${key}"`);
   }
   let deleted: string | undefined;
+  let deletedUrl: string | undefined;
   updateConfig((config) => {
     const existing = Object.keys(config.npmRegistries).find((k) => k.toLowerCase() === key.toLowerCase());
     if (!existing) {
@@ -207,9 +216,28 @@ export function nrmDel(name: string): void {
         hint: 'Only registries added with sdkvm nrm add can be deleted',
       });
     }
+    deletedUrl = config.npmRegistries[existing];
     delete config.npmRegistries[existing];
     deleted = existing;
   });
+  // updateConfig 回调要么抛错要么必然赋值；显式兜底以满足类型收窄
+  if (deleted === undefined || deletedUrl === undefined) {
+    throw new SdkvmError(`Unknown custom registry "${name}"`);
+  }
+  // 删的恰是"当前使用中"的 registry 时，.npmrc 会悬空指向已删地址（nrm current 还会误报
+  // custom）。回退到官方源，避免后续 npm install 全部打到死地址
+  const [officialPreset] = NPM_REGISTRY_PRESETS;
+  const official = officialPreset?.url ?? 'https://registry.npmjs.org/';
+  try {
+    const current = await getNpmRegistry(npmRun);
+    if (normalizeRegistryUrl(current) === normalizeRegistryUrl(deletedUrl)) {
+      await setNpmRegistry(official, npmRun);
+      log.warn(`"${deleted}" was the current registry; reverted to npm (${official})`);
+    }
+  } catch (err) {
+    // npm 不可用：删除本身已完成，仅无法回退当前源
+    log.warn(`could not reset the current npm registry: ${(err as Error).message}`);
+  }
   log.ok(`deleted registry ${deleted}`);
 }
 

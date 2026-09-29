@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { extractExpectedChecksum, verifyChecksum } from '../src/net/checksum.js';
+import { extractExpectedChecksum, preflightChecksum, verifyChecksum } from '../src/net/checksum.js';
 import { SdkvmError } from '../src/util/errors.js';
 import { log } from '../src/ui/log.js';
 import type { ResolvedArtifact } from '../src/vendor/types.js';
@@ -93,7 +93,7 @@ describe('verifyChecksum', () => {
         'a'.repeat(64),
         { strict: true },
       ),
-    ).rejects.toThrow(/Cannot fetch checksum/);
+    ).rejects.toThrow(/Cannot fetch the official checksum/);
   });
 
   it('strict mode accepts Adoptium metadata sha256', async () => {
@@ -116,9 +116,8 @@ describe('verifyChecksum', () => {
     );
   });
 
-  it('strict mode uses the mirror sidecar when the official checksum URL fails', async () => {
+  it('strict mode fails closed when the official checksum URL is unreachable (mirror sidecar must not define the hash)', async () => {
     const hash = 'ab'.repeat(64);
-    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string | URL | Request) => {
@@ -128,24 +127,26 @@ describe('verifyChecksum', () => {
         throw new Error(`unexpected ${u}`);
       }),
     );
-    await verifyChecksum(
-      art({
-        displayName: 'Apache Maven 3.9.9',
-        checksum: {
-          kind: 'sha512',
-          url: 'https://repo.maven.apache.org/maven2/apache-maven-3.9.9-bin.tar.gz.sha512',
-        },
-      }),
-      hash,
-      {
-        strict: true,
-        fallbackUrl: 'https://maven.aliyun.com/repository/central/apache-maven-3.9.9-bin.tar.gz.sha512',
-      },
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('mirror sidecar'));
+    // 镜像旁路有合法哈希也不能用：归档与旁路同受镜像控制，校验会形同虚设
+    await expect(
+      verifyChecksum(
+        art({
+          displayName: 'Apache Maven 3.9.9',
+          checksum: {
+            kind: 'sha512',
+            url: 'https://repo.maven.apache.org/maven2/apache-maven-3.9.9-bin.tar.gz.sha512',
+          },
+        }),
+        hash,
+        { strict: true },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Cannot fetch the official checksum/),
+      hint: expect.stringMatching(/unset the mirror/),
+    });
   });
 
-  it('strict mode still fails when official and mirror checksum URLs both fail', async () => {
+  it('strict mode still fails when the official checksum URL has no network at all', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -158,11 +159,11 @@ describe('verifyChecksum', () => {
           checksum: { kind: 'sha512', url: 'https://repo.maven.apache.org/maven2/a.tar.gz.sha512' },
         }),
         'ab'.repeat(64),
-        { strict: true, fallbackUrl: 'https://maven.aliyun.com/repository/central/a.tar.gz.sha512' },
+        { strict: true },
       ),
     ).rejects.toMatchObject({
-      message: expect.stringMatching(/Cannot fetch checksum/),
-      hint: expect.stringMatching(/both unreachable/),
+      message: expect.stringMatching(/Cannot fetch the official checksum/),
+      hint: expect.stringMatching(/unset the mirror/),
     });
   });
 
@@ -192,8 +193,6 @@ describe('verifyChecksum', () => {
       'ab'.repeat(64),
       {
         strict: true,
-        fallbackUrl:
-          'https://maven.aliyun.com/repository/central/org/apache/maven/apache-maven/3.8.9/apache-maven-3.8.9-bin.tar.gz.sha512',
         file,
       },
     );
@@ -220,11 +219,11 @@ describe('verifyChecksum', () => {
           },
         }),
         'ab'.repeat(64),
-        { strict: true, fallbackUrl: 'https://maven.aliyun.com/repository/central/a.tar.gz.sha512' },
+        { strict: true },
       ),
     ).rejects.toMatchObject({
-      message: expect.stringMatching(/Cannot fetch checksum/),
-      hint: expect.stringMatching(/both unreachable/),
+      message: expect.stringMatching(/Cannot fetch the official checksum/),
+      hint: expect.stringMatching(/unset the mirror/),
     });
   });
 
@@ -232,5 +231,48 @@ describe('verifyChecksum', () => {
     await expect(
       verifyChecksum(art({ checksum: { kind: 'sha256', expected: 'ab'.repeat(32) } }), 'cd'.repeat(32)),
     ).rejects.toThrow(/Checksum mismatch/);
+  });
+});
+
+describe('preflightChecksum', () => {
+  it('expected 已内嵌时不发请求，直接返回 null', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      preflightChecksum(art({ checksum: { kind: 'sha256', expected: 'ab'.repeat(32) } }), true),
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('非 strict 模式不预检', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      preflightChecksum(art({ checksum: { kind: 'sha256', url: 'https://example.com/a.json' } }), false),
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('strict 下官方源不可达 → 下载前失败（不再白下载归档）', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('github blocked');
+      }),
+    );
+    await expect(
+      preflightChecksum(art({ checksum: { kind: 'sha256', url: 'https://github.com/a.json' } }), true),
+    ).rejects.toThrow(/official checksum|Cannot fetch/);
+  });
+
+  it('命中的哈希可被 verifyChecksum 复用，不重复请求', async () => {
+    const hash = 'cd'.repeat(32);
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ sha256: hash })));
+    vi.stubGlobal('fetch', fetchMock);
+    const artifact = art({ checksum: { kind: 'sha256', url: 'https://example.com/a.tar.gz.json' } });
+    const hit = await preflightChecksum(artifact, true);
+    expect(hit?.expected).toBe(hash);
+    await verifyChecksum(artifact, hash, { strict: true, prefetched: hit });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

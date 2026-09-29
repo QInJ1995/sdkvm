@@ -15,6 +15,7 @@ import {
   mrmTest,
   mrmUse,
   MRM_BEGIN,
+  readMrmUrl,
   resolveSettingsTarget,
 } from '../src/cli/mrm.js';
 import { loadConfig } from '../src/core/config.js';
@@ -103,7 +104,8 @@ describe('applyMrmBlock', () => {
   });
 
   it('rejects an unpaired marker and a file without </settings>', () => {
-    expect(() => applyMrmBlock(`<settings>${MRM_BEGIN}</settings>`, null)).toThrow(SdkvmError);
+    // 标记独占一行才是边界；行中出现的标记文本属于用户内容，不算不配对
+    expect(() => applyMrmBlock(`<settings>\n${MRM_BEGIN}\n</settings>`, null)).toThrow(SdkvmError);
     expect(() => applyMrmBlock('<settings><mirrors></mirrors>', null)).toThrow(/no <\/settings>/);
   });
 
@@ -259,5 +261,51 @@ describe('mrm list and custom registries', () => {
     lines.length = 0;
     await mrmTest(undefined, { probe: async () => 12 });
     expect(lines.some((l) => l.includes('12 ms'))).toBe(true);
+  });
+});
+
+describe('mrm 标记行首锚定', () => {
+  it('行中出现的标记注释不当作块边界', () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+    const content = [
+      '<settings>',
+      `  <!-- 手动管理：${MRM_BEGIN} 这行不是边界 -->`,
+      '  <mirrors/>',
+      '</settings>',
+      '',
+    ].join('\n');
+    expect(readMrmUrl(content)).toBeNull();
+    fs.writeFileSync(settingsFile, content);
+    mrmUse('aliyun');
+    const xml = fs.readFileSync(settingsFile, 'utf8');
+    expect(xml).toContain('手动管理');
+    expect(xml).toContain('aliyun');
+  });
+});
+
+describe('mrm del 当前镜像回退', () => {
+  it('删除当前生效的镜像时移除 sdkvm 块（回退官方）', () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    mrmAdd('myrepo', 'https://example.com/maven');
+    mrmUse('myrepo');
+    expect(fs.readFileSync(settingsFile, 'utf8')).toContain('example.com/maven');
+    mrmDel('myrepo');
+    const xml = fs.readFileSync(settingsFile, 'utf8');
+    expect(xml).not.toContain(MRM_BEGIN);
+    expect(xml).not.toContain('example.com/maven');
+    expect(loadConfig().mavenRegistries.myrepo).toBeUndefined();
+  });
+
+  it('删除非当前镜像不动 settings.xml', () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+    mrmAdd('myrepo', 'https://example.com/maven');
+    mrmAdd('other', 'https://other.example/maven');
+    mrmUse('myrepo');
+    const before = fs.readFileSync(settingsFile, 'utf8');
+    mrmDel('other');
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(before);
   });
 });

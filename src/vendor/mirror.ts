@@ -81,19 +81,3 @@ export function applyMirrorDetail(
   const url = `${root}/${m[1]}/jdk/${platform.arch}/${platform.os}/${m[2]}`;
   return { artifact: { ...artifact, downloadUrl: url }, applied: true };
 }
-
-/**
- * 校验文件紧挨归档（Maven `.sha512`、Temurin `.json`、Corretto `.sha256`）时，
- * 官方 URL 不可达可以改拉镜像归档旁边的同一旁路文件。
- */
-export function checksumSidecarFallback(
-  officialDownload: string,
-  officialChecksum: string | undefined,
-  mirroredDownload: string,
-): string | undefined {
-  if (!officialChecksum || mirroredDownload === officialDownload) return undefined;
-  if (!officialChecksum.startsWith(officialDownload)) return undefined;
-  const suffix = officialChecksum.slice(officialDownload.length);
-  if (!/^\.[A-Za-z0-9.]+$/.test(suffix)) return undefined;
-  return mirroredDownload + suffix;
-}
