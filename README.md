@@ -76,7 +76,7 @@
 
 | SDK | 来源 | 版本能力 | 说明 |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线 |
+| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu 只选 glibc 构建(musl 变体不参与匹配) |
 | Go | [go.dev/dl](https://go.dev/dl/) | 全历史稳定版 | `latest`、`1.24`、`1.24.5` |
 | Flutter | 官方发布清单 | stable / beta | macOS 双架构;Linux / Windows 仅 x64;beta 需完整 prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts`(当前 24 Krypton)/ `latest` / major 线 / 精确版本 | npm 随所选版本一起切换 |
@@ -434,6 +434,8 @@ sdkvm nrm test
 ```
 
 内置名:`npm`、`yarn`、`taobao`(别名 `npmmirror`)、`tencent`、`cnpm`、`huawei`、`npmMirror`。
+`custom` 是保留名,`add` 拒绝使用;`test` 并发探测所有源,仅当全部失败时才以
+非零码退出(单个源失败只影响该行输出)。
 
 ### `sdkvm mrm <command>`
 
@@ -476,6 +478,7 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
   配置项 `config.mavenSettings` > `~/.m2/settings.xml`;前两项不写入配置。
 - 路径不是 Maven 默认位置时,`use` 会提示需要 `mvn -s <path>`。
 - 写入采用临时文件加原子替换,并与其它 sdkvm 写操作共用文件锁。
+- `custom` 是保留名,`add` 拒绝使用;`test` 仅当所有源都失败时才以非零码退出。
 - 标记块不配对(手工编辑残留)时拒绝操作并提示先修复。
 
 ### `sdkvm version` 与 `sdkvm upgrade`
@@ -654,7 +657,9 @@ Miniconda 追加 `%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、
   `maven-metadata.xml`),不抓取搜索页。
 - 归档在下载过程中流式计算 SHA-256,与校验源比对:Go、Flutter、Node.js(官方
   `SHASUMS256.txt`)、Miniconda、Python 校验失败立即中止;Maven 对照官方
-  `.sha512`(3.8 及更早无该文件时回退 `.sha1`);Java 各发行版尽力校验。
+  `.sha512`(3.8 及更早无该文件时回退 `.sha1`);Java 各发行版尽力校验——
+  Temurin 与 Zulu 的哈希由官方 API 预取,Corretto `21` / `lts` 用官方
+  `latest_sha256`;Corretto 精确历史版本无公开校验源,安装时警告并跳过。
 - **强制校验**场景:配置了镜像的下载,以及 Miniconda 这类下载后要**执行**的
   安装器——拿不到任何可核对的哈希时直接失败,不降级放行。
 - 校验源不可达时的回退顺序:官方旁路文件(如 Temurin `.json`、Maven `.sha512`)
@@ -829,7 +834,8 @@ CLI 后请对已启用的 SDK 重新执行一次 `use`,并删除用户环境里�
 
 ### fish 或 nushell
 
-自动写入只支持 zsh 与 bash。请按[版本切换](#版本切换)中的块自行改写。fish 示例:
+自动写入只支持 zsh 与 bash。检测不到 rc 文件时,`use` 会打印可直接粘贴的
+配置块——`$SHELL` 指向 fish 时自动给出 fish 语法。手动改写请参考[版本切换](#版本切换)中的块。fish 示例:
 
 ```fish
 set -gx JAVA_HOME $HOME/.sdkvm/current-java

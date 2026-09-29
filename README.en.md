@@ -88,7 +88,7 @@ Design goals:
 
 | SDK | Source | Version support | Notes |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only |
+| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only; on Linux, Zulu picks glibc builds only (musl variants are excluded) |
 | Go | [go.dev/dl](https://go.dev/dl/) | every historical stable release | `latest`, `1.24`, `1.24.5` |
 | Flutter | official release manifest | stable / beta | both macOS architectures; Linux / Windows are x64 only; beta needs the full prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts` (currently 24 Krypton) / `latest` / major line / exact | npm switches together with the runtime |
@@ -472,7 +472,9 @@ sdkvm nrm test
 ```
 
 Built-in names: `npm`, `yarn`, `taobao` (alias `npmmirror`), `tencent`, `cnpm`,
-`huawei`, `npmMirror`.
+`huawei`, `npmMirror`. `custom` is a reserved name rejected by `add`; `test`
+probes all registries concurrently and exits non-zero only when every probe
+fails (a single failure just marks that row).
 
 ### `sdkvm mrm <command>`
 
@@ -520,6 +522,8 @@ Behavior notes:
   first two are not saved.
 - When the path is not Maven's default, `use` prints the required `mvn -s <path>`.
 - Writes go through a temp file with atomic rename and share sdkvm's file lock.
+- `custom` is a reserved name rejected by `add`; `test` exits non-zero only
+  when every repository fails.
 - Unpaired marker comments (manual-edit leftovers) abort the command with a
   repair hint.
 
@@ -721,7 +725,10 @@ Installs, switches, removals, `upgrade`, and `mrm use` hold the exclusive
   checksum source: Go, Flutter, Node.js (official `SHASUMS256.txt`), Miniconda,
   and Python abort on mismatch; Maven checks the official `.sha512` (falling
   back to the published `.sha1` for 3.8 and older); Java vendors verify
-  whenever a checksum is available.
+  whenever a checksum is available — Temurin and Zulu hashes are prefetched
+  from the official APIs, Corretto `21` / `lts` uses the official
+  `latest_sha256`; exact historical Corretto versions have no public checksum
+  source and are installed with a warning, unverified.
 - **Strict verification** applies to mirrored downloads and to installers that
   will be **executed** (Miniconda): if no verifiable hash can be obtained, the
   install fails rather than proceeding.
@@ -913,8 +920,10 @@ remove leftover old variable names from the user environment (Windows registry
 
 ### fish or nushell
 
-Automatic rc writes support zsh and bash only. Translate the blocks in
-[Switching](#switching) yourself. fish example:
+Automatic rc writes support zsh and bash only. When no rc file can be
+detected, `use` prints a paste-ready block — in fish syntax when `$SHELL`
+points at fish. To translate the blocks in [Switching](#switching) yourself,
+use this fish example:
 
 ```fish
 set -gx JAVA_HOME $HOME/.sdkvm/current-java
