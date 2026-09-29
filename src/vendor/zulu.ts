@@ -72,6 +72,8 @@ function pickPlainJdk(
   const candidates = packages.filter((p) => {
     if (!/^zulu[\d.]+-ca-jdk[\d.]*-/i.test(p.name)) return false;
     if (!p.name.endsWith(ext)) return false;
+    // musl 变体与 glibc 同版本同排序权重，API 恰好把 musl 排在后——不排除会选中 musl
+    if (/musl/i.test(p.name)) return false;
     if (wanted && !zuluVersionMatches(p.java_version, wanted)) return false;
     return true;
   });

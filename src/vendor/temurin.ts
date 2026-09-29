@@ -1,6 +1,6 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor } from './types.js';
 import type { VendorPlatform } from './types.js';
-import { HttpError, httpJson, httpFetch } from '../net/http.js';
+import { HttpError, httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { formatVersion, parseVersion, type SdkVersion } from '../core/version.js';
 
@@ -11,16 +11,29 @@ interface AvailableReleases {
   available_lts_releases: number[];
 }
 
-/** 用 redirect:manual 拿 307 Location（无需真正连 GitHub） */
-async function resolveLatestRedirect(
+interface LatestAsset {
+  binary?: {
+    package?: {
+      link?: unknown;
+      checksum?: unknown;
+    };
+  };
+}
+
+/**
+ * major 线最新版的下载 URL 与官方 sha256。
+ * 走 assets API（api.adoptium.net）而非 GitHub `.json` 旁路：
+ * 镜像模式下 GitHub 不可达是常态，镜像又不托管 `.json`，校验会无路可走。
+ */
+async function resolveLatestAsset(
   major: number,
   os: string,
   arch: string,
-): Promise<string> {
-  const url = `${API}/v3/binary/latest/${major}/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`;
-  let res: Response;
+): Promise<{ downloadUrl: string; sha256: string | null }> {
+  const url = `${API}/v3/assets/latest/${major}/hotspot?os=${os}&architecture=${arch}&image_type=jdk`;
+  let data: unknown;
   try {
-    res = await httpFetch(url, { redirect: 'manual' });
+    data = await httpJson<unknown>(url);
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) {
       throw new SdkvmError(`No Temurin JDK ${major} build for ${os}/${arch}`, {
@@ -29,17 +42,18 @@ async function resolveLatestRedirect(
     }
     throw err;
   }
-  if (res.status !== 302 && res.status !== 307 && res.status !== 308) {
-    throw new SdkvmError(`Adoptium API returned ${res.status} for JDK ${major}`);
+  if (!Array.isArray(data) || data.length === 0) {
+    throw new SdkvmError(`Adoptium API returned no asset for JDK ${major}`);
   }
-  const location = res.headers.get('location');
-  if (!location) throw new SdkvmError(`Adoptium API returned no redirect for JDK ${major}`);
-  // Location 只接受 https（相对地址按原始 URL 解析）
-  const abs = new URL(location, url);
-  if (abs.protocol !== 'https:') {
-    throw new SdkvmError(`Adoptium redirect for JDK ${major} is not https: ${abs.href}`);
+  const pkg = (data[0] as LatestAsset)?.binary?.package;
+  const link = typeof pkg?.link === 'string' ? pkg.link : '';
+  if (!link.startsWith('https://')) {
+    throw new SdkvmError(`Adoptium API returned no download link for JDK ${major}`);
   }
-  return location.startsWith('https:') ? location : abs.href;
+  const checksum = typeof pkg?.checksum === 'string' && /^[0-9a-f]{64}$/i.test(pkg.checksum)
+    ? pkg.checksum.toLowerCase()
+    : null;
+  return { downloadUrl: link, sha256: checksum };
 }
 
 /**
@@ -91,19 +105,29 @@ function githubAssetUrl(version: string, os: string, arch: string): string {
 }
 
 async function fetchAvailable(): Promise<AvailableReleases> {
-  return httpJson<AvailableReleases>(`${API}/v3/info/available_releases`);
+  const data = await httpJson<unknown>(`${API}/v3/info/available_releases`);
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    !Array.isArray((data as AvailableReleases).available_releases) ||
+    !Array.isArray((data as AvailableReleases).available_lts_releases)
+  ) {
+    throw new SdkvmError('Adoptium API returned an unexpected available_releases payload');
+  }
+  return data as AvailableReleases;
 }
 
 async function resolveMajor(major: number, platform: VendorPlatform): Promise<ResolvedArtifact> {
-  const location = await resolveLatestRedirect(major, platform.os, platform.arch);
-  const version = versionFromGithubUrl(location);
-  return buildArtifact(version, platform, location);
+  const { downloadUrl, sha256 } = await resolveLatestAsset(major, platform.os, platform.arch);
+  const version = versionFromGithubUrl(downloadUrl);
+  return buildArtifact(version, platform, downloadUrl, sha256);
 }
 
 function buildArtifact(
   version: string,
   platform: VendorPlatform,
   downloadUrl: string,
+  expectedSha?: string | null,
 ): ResolvedArtifact {
   const v = parseVersion('temurin', version);
   const archive = platform.os === 'windows' ? 'zip' : 'tar.gz';
@@ -113,7 +137,10 @@ function buildArtifact(
     dirName: `temurin-${formatVersion(v)}`,
     displayName: `Temurin ${formatVersion(v)}`,
     downloadUrl,
-    checksum: { kind: 'sha256', url: `${downloadUrl}.json` },
+    // 预取到 API 哈希时直接用；否则回退 GitHub `.json` 旁路（full 规格路径）
+    checksum: expectedSha
+      ? { kind: 'sha256', expected: expectedSha }
+      : { kind: 'sha256', url: `${downloadUrl}.json` },
     archive,
   };
 }

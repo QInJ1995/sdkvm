@@ -27,7 +27,12 @@ const GO_OS = { mac: 'darwin', linux: 'linux', windows: 'windows' } as const;
 const GO_ARCH = { aarch64: 'arm64', x64: 'amd64' } as const;
 
 async function fetchReleases(): Promise<GoRelease[]> {
-  return httpJson<GoRelease[]>(LIST_URL);
+  const data = await httpJson<unknown>(LIST_URL);
+  // 网关错误页/结构变更时给出可读错误，而不是 TypeError
+  if (!Array.isArray(data)) {
+    throw new SdkvmError('go.dev release list has an unexpected structure');
+  }
+  return data as GoRelease[];
 }
 
 /** stable 版本 → 版本对象（按版本降序） */

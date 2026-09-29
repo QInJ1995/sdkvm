@@ -25,8 +25,12 @@ function tryParseEntry(e: NodeIndexEntry): SdkVersion | null {
 
 /** 官方发布索引，按版本降序（自行重排，不信任远端顺序） */
 async function fetchIndex(): Promise<NodeIndexEntry[]> {
-  const entries = await httpJson<NodeIndexEntry[]>(`${DIST}/index.json`);
-  return entries
+  const data = await httpJson<unknown>(`${DIST}/index.json`);
+  // 网关错误页/结构变更时给出可读错误，而不是 TypeError
+  if (!Array.isArray(data)) {
+    throw new SdkvmError('nodejs.org index has an unexpected structure');
+  }
+  return (data as NodeIndexEntry[])
     .map((e) => ({ e, v: tryParseEntry(e) }))
     .filter((x): x is { e: NodeIndexEntry; v: SdkVersion } => x.v !== null)
     .sort((a, b) => compareVersions(b.v, a.v))

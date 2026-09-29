@@ -1,7 +1,8 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
-import { httpFetch } from '../net/http.js';
+import { httpFetch, httpText, HttpError } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
+import { log } from '../ui/log.js';
 
 /**
  * Corretto 8 的构建号固定两位：8.504.01.1。
@@ -39,7 +40,17 @@ function resourceUrl(version: string, platform: VendorPlatform): string {
 
 async function resolveLatestVersion(major: number, platform: VendorPlatform): Promise<string> {
   const url = `${BASE}/latest/${latestFileName(major, platform)}`;
-  const res = await httpFetch(url, { redirect: 'manual' });
+  let res;
+  try {
+    res = await httpFetch(url, { redirect: 'manual' });
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) {
+      throw new SdkvmError(`No Corretto JDK ${major} build for ${platform.os}/${platform.arch}`, {
+        hint: 'This platform is not published for that major. Try another vendor, for example: sdkvm java install 21 --vendor temurin',
+      });
+    }
+    throw err;
+  }
   if (res.status !== 301 && res.status !== 302 && res.status !== 307 && res.status !== 308) {
     throw new SdkvmError(`Corretto returned ${res.status} for JDK ${major}`);
   }
@@ -49,6 +60,21 @@ async function resolveLatestVersion(major: number, platform: VendorPlatform): Pr
     throw new SdkvmError(`Cannot parse Corretto version from redirect: ${location}`);
   }
   return m[1];
+}
+
+/**
+ * latest 入口的官方 sha256（裸 hex）。resources 旁路 `.sha256` 已下线（403），
+ * major/lts 走 latest 解析时从这里取哈希。两次请求之间 latest 若滚动更新会哈希错位，
+ * 表现为校验失败，重试即可（fail-closed）。
+ */
+async function fetchLatestSha256(major: number, platform: VendorPlatform): Promise<string | null> {
+  try {
+    const text = await httpText(`${BASE}/latest_sha256/${latestFileName(major, platform)}`);
+    const hash = text.trim().split(/\s+/)[0] ?? '';
+    return /^[0-9a-f]{64}$/i.test(hash) ? hash.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 export const correttoVendor: Vendor = {
@@ -64,9 +90,11 @@ export const correttoVendor: Vendor = {
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
     let version: string;
+    let majorSha: string | null = null;
     if (spec.kind === 'lts') {
       const latestLts = Math.max(...MAJORS);
       version = await resolveLatestVersion(latestLts, platform);
+      majorSha = await fetchLatestSha256(latestLts, platform);
     } else if (spec.kind === 'major') {
       if (!MAJORS.includes(spec.major)) {
         throw new SdkvmError(`Corretto does not publish JDK ${spec.major}`, {
@@ -74,6 +102,7 @@ export const correttoVendor: Vendor = {
         });
       }
       version = await resolveLatestVersion(spec.major, platform);
+      majorSha = await fetchLatestSha256(spec.major, platform);
     } else if (spec.kind === 'full') {
       const v = parseVersion('corretto', spec.version);
       if (!MAJORS.includes(v.major)) {
@@ -87,13 +116,19 @@ export const correttoVendor: Vendor = {
     const canonical = canonicalCorrettoVersion(version);
     const v = parseVersion('corretto', canonical);
     const url = resourceUrl(canonical, platform);
+    if (spec.kind !== 'full' && !majorSha) {
+      // latest_sha256 端点拿不到哈希时无法核对：如实提示，不再挂已下线的 .sha256 死链
+      log.warn(`cannot fetch Corretto sha256 for ${canonical}, archive will be installed unverified`);
+    }
     return {
       vendorId: 'corretto',
       version: v,
       dirName: `corretto-${formatVersion(v)}`,
       displayName: `Corretto ${formatVersion(v)}`,
       downloadUrl: url,
-      checksum: { kind: 'sha256', url: `${url}.sha256` },
+      // full 历史版本无公开校验旁路（.sha256 已 403）；major/lts 用 latest_sha256 的官方值
+      checksum:
+        spec.kind !== 'full' && majorSha ? { kind: 'sha256', expected: majorSha } : null,
       archive: platform.os === 'windows' ? 'zip' : 'tar.gz',
     };
   },

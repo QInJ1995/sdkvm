@@ -1,7 +1,13 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
 import { httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
-import { compareVersions, formatFlutterVersion, parseFlutterVersion, type SdkVersion } from '../core/version.js';
+import {
+  compareTaggedVersions,
+  compareVersions,
+  formatFlutterVersion,
+  parseFlutterVersion,
+  type SdkVersion,
+} from '../core/version.js';
 import { detectPlatform } from '../core/platform.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { groupMinorLines, specLabel } from './shared.js';
@@ -37,17 +43,22 @@ async function fetchEntries(platform: VendorPlatform): Promise<{
   all: { raw: FlutterRelease; v: SdkVersion }[];
 }> {
   const manifest = await httpJson<FlutterManifest>(`${MANIFEST_BASE}/releases_${FLUTTER_OS[platform.os]}.json`);
+  if (!manifest || typeof manifest.base_url !== 'string' || !Array.isArray(manifest.releases)) {
+    throw new SdkvmError('Flutter release manifest has an unexpected structure');
+  }
   const arch = FLUTTER_ARCH[platform.arch];
   const parsed: { raw: FlutterRelease; v: SdkVersion }[] = [];
   for (const r of manifest.releases) {
-    if (r.dart_sdk_arch !== arch) continue;
+    // 旧条目没有 dart_sdk_arch 字段（stable 直到 1.22.6）：那个年代只有 x64 归档
+    if ((r.dart_sdk_arch ?? 'x64') !== arch) continue;
     try {
       parsed.push({ raw: r, v: parseFlutterVersion('flutter', r.version) });
     } catch {
       // 跳过无法解析的旧格式条目
     }
   }
-  parsed.sort((a, b) => compareVersions(b.v, a.v));
+  // parsed 含预发布条目：extra 是 prerelease 标记，正式版必须排在预发布之上
+  parsed.sort((a, b) => compareTaggedVersions(b.v, a.v));
   return {
     baseUrl: manifest.base_url,
     stable: parsed.filter((x) => x.raw.channel === 'stable' && x.v.extra == null),

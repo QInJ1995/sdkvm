@@ -161,9 +161,16 @@ function buildArtifact(file: PythonFile, prefix: string): ResolvedArtifact {
 
 /** 历史 release 标签（full 版本回退用；GitHub releases 按时间倒序，tag 为 YYYYMMDD 日期式） */
 async function recentReleaseTags(): Promise<string[]> {
-  const releases = await httpJson<GithubRelease[]>(
-    'https://api.github.com/repos/astral-sh/python-build-standalone/releases?per_page=5',
-  );
+  let releases: GithubRelease[];
+  try {
+    releases = await httpJson<GithubRelease[]>(
+      'https://api.github.com/repos/astral-sh/python-build-standalone/releases?per_page=5',
+    );
+  } catch {
+    // 未认证 GitHub API 限流（403）或不可达：回退列表为空即可，
+    // 让调用方走正常的"未找到版本"报错，而不是把裸 HttpError 抛给用户
+    return [];
+  }
   return releases.map((r) => r.tag_name ?? '').filter((t) => /^\d{8}$/.test(t));
 }
 

@@ -19,14 +19,42 @@ function resJson(body: unknown): Response {
   return Response.json(body);
 }
 
+/** v3/assets/latest 响应：package.link 是 GitHub 下载 URL，package.checksum 是官方 sha256 */
+function resAsset(major: number, file: string, checksum: string): Response {
+  return resJson([
+    {
+      version_data: { major },
+      binary: {
+        package: {
+          name: file,
+          link: `https://github.com/adoptium/temurin${major}-binaries/releases/download/jdk-x/${file}`,
+          checksum,
+        },
+      },
+    },
+  ]);
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('temurin', () => {
-  it('resolve major via redirect Location', async () => {
+  it('resolve major via assets API (link + official sha256)', async () => {
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (String(url).includes('/v3/binary/latest/21')) return res30x(GH_LOCATION);
+      const u = String(url);
+      if (u.includes('/v3/assets/latest/21')) {
+        return resJson([
+          {
+            binary: {
+              package: {
+                link: GH_LOCATION,
+                checksum: 'a'.repeat(64),
+              },
+            },
+          },
+        ]);
+      }
       throw new Error(`unexpected ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -36,7 +64,8 @@ describe('temurin', () => {
     expect(a.dirName).toBe('temurin-21.0.12.1+1');
     expect(a.displayName).toBe('Temurin 21.0.12.1+1');
     expect(a.archive).toBe('tar.gz');
-    expect(a.checksum?.url).toBe(`${GH_LOCATION}.json`);
+    // 官方 API 预取的哈希：镜像模式下不再依赖 GitHub 的 .json 旁路
+    expect(a.checksum?.expected).toBe('a'.repeat(64));
   });
 
   it('resolve lts uses available_releases', async () => {
@@ -48,10 +77,17 @@ describe('temurin', () => {
           available_lts_releases: [21, 25],
         });
       }
-      if (u.includes('/v3/binary/latest/25')) {
-        return res30x(
-          'https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4_1.tar.gz',
-        );
+      if (u.includes('/v3/assets/latest/25')) {
+        return resJson([
+          {
+            binary: {
+              package: {
+                link: 'https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B1/OpenJDK25U-jdk_aarch64_mac_hotspot_25.0.4_1.tar.gz',
+                checksum: 'b'.repeat(64),
+              },
+            },
+          },
+        ]);
       }
       throw new Error(`unexpected ${url}`);
     });
@@ -59,6 +95,7 @@ describe('temurin', () => {
 
     const a = await temurinVendor.resolve({ kind: 'lts' }, MAC);
     expect(a.dirName).toBe('temurin-25.0.4+1');
+    expect(a.checksum?.expected).toBe('b'.repeat(64));
   });
 
   it('resolve full constructs GitHub asset URL', async () => {
@@ -88,10 +125,13 @@ describe('temurin', () => {
     expect(a.downloadUrl).toContain('OpenJDK21U-jdk_x64_windows_hotspot_21.0.5_11.zip');
   });
 
-  it('parses a legacy jdk8u redirect into 8.0.<update>+<build>', async () => {
+  it('parses a legacy jdk8u asset link into 8.0.<update>+<build>', async () => {
     const location =
       'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u504-b01/OpenJDK8U-jdk_x64_linux_hotspot_8u504b01.tar.gz';
-    vi.stubGlobal('fetch', vi.fn(async () => res30x(location)));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => resJson([{ binary: { package: { link: location, checksum: 'c'.repeat(64) } } }])),
+    );
     const a = await temurinVendor.resolve({ kind: 'major', major: 8 }, LIN);
     expect(a.downloadUrl).toBe(location);
     expect(a.dirName).toBe('temurin-8.0.504+1');
@@ -319,23 +359,29 @@ describe('zulu', () => {
 });
 
 describe('corretto', () => {
-  it('resolve major via 302 Location parse', async () => {
+  it('resolve major via 302 Location parse + latest_sha256', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        res30x(
-          'https://corretto.aws/downloads/resources/21.0.12.9.1/amazon-corretto-21.0.12.9.1-macosx-aarch64.tar.gz',
-        ),
-      ),
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('/latest/')) {
+          return res30x(
+            'https://corretto.aws/downloads/resources/21.0.12.9.1/amazon-corretto-21.0.12.9.1-macosx-aarch64.tar.gz',
+          );
+        }
+        if (u.includes('/latest_sha256/')) {
+          return new Response('d'.repeat(64));
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
     );
     const a = await correttoVendor.resolve({ kind: 'major', major: 21 }, MAC);
     expect(a.dirName).toBe('corretto-21.0.12.9.1');
     expect(a.downloadUrl).toBe(
       'https://corretto.aws/downloads/resources/21.0.12.9.1/amazon-corretto-21.0.12.9.1-macosx-aarch64.tar.gz',
     );
-    expect(a.checksum?.url).toBe(
-      'https://corretto.aws/downloads/resources/21.0.12.9.1/amazon-corretto-21.0.12.9.1-macosx-aarch64.tar.gz.sha256',
-    );
+    // resources 的 .sha256 旁路已 403：major/lts 从 latest_sha256 端点预取官方哈希
+    expect(a.checksum?.expected).toBe('d'.repeat(64));
   });
 
   it('keeps Corretto 8 build numbers zero-padded in the directory and the URL', async () => {
@@ -346,11 +392,13 @@ describe('corretto', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        res30x(
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('/latest_sha256/')) return new Response('e'.repeat(64));
+        return res30x(
           'https://corretto.aws/downloads/resources/8.504.01.1/amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz',
-        ),
-      ),
+        );
+      }),
     );
     const latest = await correttoVendor.resolve({ kind: 'major', major: 8 }, MAC);
     expect(latest.dirName).toBe('corretto-8.504.01.1');
@@ -361,9 +409,11 @@ describe('corretto', () => {
     expect(collapsed.downloadUrl).toContain('amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz');
   });
 
-  it('resolve full builds resource URL with per-OS naming', async () => {
+  it('resolve full builds resource URL with per-OS naming (no checksum source)', async () => {
     const mac = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, MAC);
     expect(mac.downloadUrl).toContain('amazon-corretto-21.0.4.9.1-macosx-aarch64.tar.gz');
+    // full 历史版本无公开校验旁路：诚实置 null，安装时 warn 跳过
+    expect(mac.checksum).toBeNull();
     const lin = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, LIN);
     expect(lin.downloadUrl).toContain('amazon-corretto-21.0.4.9.1-linux-x64.tar.gz');
     const win = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, WIN);
