@@ -3,7 +3,10 @@ import { SdkvmError } from '../util/errors.js';
 /** 厂商 id：全局唯一字符串（temurin/zulu/corretto/golang），config.mirror 以它为键 */
 export type VendorId = string;
 
-/** 与 Adoptium available_lts_releases 对齐的 LTS major 集（仅 java） */
+/** 与 Adoptium available_lts_releases 对齐的 LTS major 集（仅 java）。
+ *  install 走 Adoptium API 动态解析，本表只用于已装版本的离线筛选（use/ls 的 lts）：
+ *  下一个 LTS（JDK 29，约 2027-09）发布后须手动加入，否则已装 29 的用户 `use lts`
+ *  匹配不到——未命中时 registry 会提示该表可能过时 */
 export const LTS_MAJORS = new Set([8, 11, 17, 21, 25]);
 
 export const JAVA_VENDOR_IDS = ['temurin', 'zulu', 'corretto'] as const;
@@ -370,6 +373,7 @@ export function parseFlutterUserSpec(input: string): UserSpec {
     vendor = m[1];
     s = m[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (/^\d+\.\d+\.\d+(-[0-9a-z.\-]+)?$/.test(s)) return { vendor, spec: { kind: 'full', version: s } };
   const line = /^(\d+)\.(\d+)$/.exec(s);
@@ -489,6 +493,7 @@ export function parseMavenUserSpec(input: string): UserSpec {
     vendor = 'maven';
     s = m[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (s === 'lts' || s === '--lts') {
     throw new SdkvmError(`Invalid Maven version: "${input}"`, {
@@ -599,6 +604,7 @@ export function parseMinicondaUserSpec(input: string): UserSpec {
     vendor = 'miniconda';
     s = prefixed[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (s === 'lts' || s === '--lts') {
     throw new SdkvmError(`Invalid Miniconda version: "${input}"`, {
@@ -703,6 +709,7 @@ export function parsePythonUserSpec(input: string): UserSpec {
     vendor = 'cpython';
     s = prefixed[2];
   }
+  s = stripUserPrefix(s, 'v');
   if (s === 'latest') return { vendor, spec: { kind: 'latest' } };
   if (s === 'lts' || s === '--lts') {
     throw new SdkvmError(`Invalid Python version: "${input}"`, {

@@ -44,6 +44,57 @@ function stubNodeApi(): void {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.doUnmock('../src/core/platform.js');
+  vi.resetModules();
+});
+
+describe('nodejs vendor (musl 主机选官方 -musl 归档)', () => {
+  it('x64 musl：优先 linux-x64-musl 归档，绝不容忍 glibc 归档回退', async () => {
+    vi.doMock('../src/core/platform.js', async (importOriginal) => {
+      const orig = await importOriginal<typeof import('../src/core/platform.js')>();
+      return { ...orig, hostLibc: () => 'musl' as const };
+    });
+    vi.resetModules();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request) => {
+        const u = String(url);
+        if (u.endsWith('/index.json')) return Response.json(INDEX);
+        const m = /\/(v[\d.]+)\/SHASUMS256\.txt$/.exec(u);
+        // 该版本线只发 musl（模拟 v24.21.0+ 的官方现实）
+        if (m && m[1]) {
+          return new Response([`${Y}  node-${m[1]}-linux-x64-musl.tar.xz`, `${Z}  node-${m[1]}-linux-x64.tar.xz`].join('\n'));
+        }
+        throw new Error(`unexpected fetch: ${u}`);
+      }),
+    );
+    const { nodejsVendor: freshVendor } = await import('../src/vendor/nodejs.js');
+    const a = await freshVendor.resolve({ kind: 'lts' }, LIN);
+    expect(a.downloadUrl).toBe('https://nodejs.org/dist/v24.2.0/node-v24.2.0-linux-x64-musl.tar.xz');
+    expect(a.archive).toBe('tar.xz');
+  });
+
+  it('x64 musl：版本线没有 musl 归档时报可读错误并指向更新版本', async () => {
+    vi.doMock('../src/core/platform.js', async (importOriginal) => {
+      const orig = await importOriginal<typeof import('../src/core/platform.js')>();
+      return { ...orig, hostLibc: () => 'musl' as const };
+    });
+    vi.resetModules();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request) => {
+        const u = String(url);
+        if (u.endsWith('/index.json')) return Response.json(INDEX);
+        const m = /\/(v[\d.]+)\/SHASUMS256\.txt$/.exec(u);
+        if (m && m[1]) return new Response([`${Y}  node-${m[1]}-linux-x64.tar.xz`].join('\n'));
+        throw new Error(`unexpected fetch: ${u}`);
+      }),
+    );
+    const { nodejsVendor: freshVendor } = await import('../src/vendor/nodejs.js');
+    const err: unknown = await freshVendor.resolve({ kind: 'lts' }, LIN).catch((e) => e);
+    expect((err as Error).message).toMatch(/musl/);
+    expect(String((err as { hint?: unknown }).hint)).toMatch(/v24\.21\.0/);
+  });
 });
 
 describe('nodejs vendor', () => {

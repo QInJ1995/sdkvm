@@ -90,6 +90,27 @@ describe.skipIf(process.platform === 'win32')('uninstall 当前版本', () => {
     expect(fs.existsSync(bak)).toBe(false);
     expect(fs.existsSync(marker)).toBe(false);
   });
+
+  it('卸载清扫全部 rc 候选：换过默认 shell 后旧 rc 里的块也被清掉', async () => {
+    // 回归：use 时 $SHELL=zsh 写 .zshrc；卸载时 $SHELL=bash 只清 .bashrc，
+    // .zshrc 里的块（指向已删除的 current 链接）会永久残留
+    const dir = path.join(home, 'jdks', 'temurin-21.0.5+11');
+    const javaHome = path.join(dir, 'Contents', 'Home');
+    fs.mkdirSync(javaHome, { recursive: true });
+    setCurrent('java', javaHome, detectPlatform());
+
+    const zshrc = path.join(userHome, '.zshrc');
+    const bashrc = path.join(userHome, '.bashrc');
+    fs.writeFileSync(zshrc, upsertRcContent('export Z=1\n', 'java'));
+    fs.writeFileSync(bashrc, 'export B=1\n');
+
+    process.env.SHELL = '/bin/bash'; // 卸载时 detectRcFile 指向 .bashrc
+    await uninstallCommand('java', '21', {});
+
+    expect(fs.readFileSync(zshrc, 'utf8')).not.toContain(rcBegin('java'));
+    expect(fs.readFileSync(zshrc, 'utf8')).toContain('export Z=1');
+    expect(fs.readFileSync(bashrc, 'utf8')).toBe('export B=1\n');
+  });
 });
 
 describe('current 链接位置被真实目录占用', () => {

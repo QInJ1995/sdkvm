@@ -15,7 +15,7 @@ import {
   nrmUse,
 } from '../src/cli/nrm.js';
 import { loadConfig } from '../src/core/config.js';
-import { npmCliPath } from '../src/util/spawn.js';
+import { npmCliPath, run } from '../src/util/spawn.js';
 import { SdkvmError } from '../src/util/errors.js';
 import { log } from '../src/ui/log.js';
 
@@ -251,5 +251,70 @@ describe('nrm del 当前源回退', () => {
     await expect(nrmDel('gone2', npmRun)).resolves.toBeUndefined();
     expect(loadConfig().npmRegistries.gone2).toBeUndefined();
     expect(warn.mock.calls.some((c) => String(c[0]).includes('could not reset'))).toBe(true);
+  });
+});
+
+describe('run() 的失败分类（cause 保留）', () => {
+  it('启动失败（ENOENT）的 cause.code 是 errno 字符串', async () => {
+    const err = (await run('sdkvm-no-such-cmd-xyz', ['--version']).catch((e: unknown) => e)) as SdkvmError;
+    expect(err).toBeInstanceOf(SdkvmError);
+    expect(err.message).toMatch(/Failed to run sdkvm-no-such-cmd-xyz/);
+    expect((err.cause as { code?: unknown } | undefined)?.code).toBe('ENOENT');
+  });
+
+  it('进程非零退出的 cause.code 是退出码数字，stderr 进消息', async () => {
+    const err = (await run(process.execPath, ['-e', 'console.error("boom"); process.exit(7)']).catch(
+      (e: unknown) => e,
+    )) as SdkvmError;
+    expect(err.message).toMatch(/Failed to run .+: boom/);
+    expect((err.cause as { code?: unknown } | undefined)?.code).toBe(7);
+  });
+});
+
+describe('defaultNpmRunner 不把 npm 运行失败误报成未安装', () => {
+  // resetModules 后 nrm.js 重新求值其依赖图，errors.js 也是新实例——
+  // mock 的 run() 必须用同一次注册表里的 SdkvmError 构造，instanceof 才成立
+  async function freshNpmRunner(throwWhat: (Fresh: new (m: string, o?: object) => Error) => Promise<never>) {
+    vi.doMock('../src/util/spawn.js', () => ({
+      npmExec: () => ({ cmd: 'npm', prefixArgs: [] }),
+      npmCliPath: (p: string) => p,
+      run: () => throwWhat(FreshSdkvmError),
+    }));
+    vi.resetModules();
+    const { SdkvmError: FreshSdkvmError } = await import('../src/util/errors.js');
+    const { defaultNpmRunner } = await import('../src/cli/nrm.js');
+    return defaultNpmRunner;
+  }
+
+  afterEach(() => {
+    vi.doUnmock('../src/util/spawn.js');
+    vi.resetModules();
+  });
+
+  it('npm 自身非零退出（只读 .npmrc 等）原样上抛', async () => {
+    const runner = await freshNpmRunner(async (Fresh) => {
+      throw new Fresh('Failed to run npm: EACCES: permission denied, open ~/.npmrc', {
+        cause: { code: 254, stderr: 'EACCES: permission denied, open ~/.npmrc' },
+      });
+    });
+    const err = (await runner(['config', 'set', 'registry', 'x']).catch((e: unknown) => e)) as SdkvmError;
+    // 关键：不再重标成 "npm is not available"，排障方向是 npm 自身的失败原因
+    expect(err.message).toMatch(/Failed to run npm: EACCES/);
+  });
+
+  it('启动失败（ENOENT）仍给安装引导提示', async () => {
+    const runner = await freshNpmRunner(async (Fresh) => {
+      throw new Fresh('Failed to run npm: spawn npm ENOENT', { cause: { code: 'ENOENT' } });
+    });
+    const err = (await runner(['config', 'get', 'registry']).catch((e: unknown) => e)) as SdkvmError;
+    expect(err.message).toBe('npm is not available');
+    expect(String(err.hint)).toMatch(/Check your Node.js\/npm installation/);
+  });
+
+  it('无 cause 的失败（如超时）也原样上抛', async () => {
+    const runner = await freshNpmRunner(async (Fresh) => {
+      throw new Fresh('Failed to run npm: timed out after 5s');
+    });
+    await expect(runner(['config', 'get', 'registry'])).rejects.toThrow(/timed out/);
   });
 });

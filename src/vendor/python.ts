@@ -159,12 +159,14 @@ function buildArtifact(file: PythonFile, prefix: string): ResolvedArtifact {
   };
 }
 
-/** 历史 release 标签（full 版本回退用；GitHub releases 按时间倒序，tag 为 YYYYMMDD 日期式） */
+/** 历史 release 标签（full 版本回退用；GitHub releases 按时间倒序，tag 为 YYYYMMDD 日期式）。
+ *  PBS 约每周切一个 release：per_page 必须 ≥30 才能覆盖数月，5 个只有约 5 周，
+ *  稍老的 patch 会在这里查不到而误报"无此版本" */
 async function recentReleaseTags(): Promise<string[]> {
   let releases: GithubRelease[];
   try {
     releases = await httpJson<GithubRelease[]>(
-      'https://api.github.com/repos/astral-sh/python-build-standalone/releases?per_page=5',
+      'https://api.github.com/repos/astral-sh/python-build-standalone/releases?per_page=30',
     );
   } catch {
     // 未认证 GitHub API 限流（403）或不可达：回退列表为空即可，
@@ -269,7 +271,10 @@ export const cpythonVendor: Vendor = {
         );
       }
       throw new SdkvmError(`No Python release matches "${specLabel(spec)}"`, {
-        hint: `Run \`${cmdPath('python')} ls -r\` to see available versions.`,
+        hint:
+          spec.kind === 'full'
+            ? `Not in the latest release or the last 30 weekly releases. Older builds exist upstream (python-build-standalone tags) but are outside this lookup window — pick a newer patch, or install ${specLabel(spec)} by hand.`
+            : `Run \`${cmdPath('python')} ls -r\` to see available versions.`,
       });
     }
     const file = forPlatform.find((item) => formatPythonVersion(item.version) === formatPythonVersion(target));

@@ -74,10 +74,12 @@ export const nodejsVendor: Vendor = {
   },
 
   async resolve(spec: VersionSpec, platform: VendorPlatform): Promise<ResolvedArtifact> {
-    // nodejs.org 的官方归档全是 glibc 构建：musl 主机（Alpine 等）装上也是一跑就段错误，
-    // 在解析阶段就给能读懂的错误
-    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
-      throw new SdkvmError('Node.js releases from nodejs.org are glibc builds; musl Linux (Alpine) is not supported', {
+    // 官方 musl 归档自 v24.21.0 / v26.8.0 起提供（linux-x64-musl，仅 x64）：
+    // x64 musl 主机（Alpine 等）直接用官方构建；aarch64 musl 官方不发布，
+    // glibc 归档装上即段错误，仍在解析阶段拒绝
+    const musl = platform.os === 'linux' && hostLibc(platform.arch) === 'musl';
+    if (musl && platform.arch !== 'x64') {
+      throw new SdkvmError('nodejs.org publishes no linux-arm64-musl builds; musl aarch64 is not supported', {
         hint: 'Use the distro nodejs package (apk add nodejs), or unofficial musl builds from https://unofficial-builds.nodejs.org (not covered by this mirror/checksum path)',
       });
     }
@@ -108,12 +110,22 @@ export const nodejsVendor: Vendor = {
     const plat = platform.os === 'mac' ? 'darwin' : platform.os === 'linux' ? 'linux' : 'win';
     const arch = platform.arch === 'aarch64' ? 'arm64' : 'x64';
     const base = `node-${entry.version}-${plat}-${arch}`;
-    const candidates = platform.os === 'windows' ? [`${base}.zip`] : [`${base}.tar.xz`, `${base}.tar.gz`];
+    // musl 主机只要 -musl 变体：glibc 归档装上即段错误，不能作为回退
+    const suffix = musl ? '-musl' : '';
+    const candidates =
+      platform.os === 'windows'
+        ? [`${base}.zip`]
+        : [`${base}${suffix}.tar.xz`, `${base}${suffix}.tar.gz`];
     const filename = candidates.find((f) => sums.has(f));
     if (!filename) {
-      throw new SdkvmError(`No Node.js ${formatNodeVersion(version)} archive for ${platform.os}/${platform.arch}`, {
-        hint: 'Run `sdkvm node ls -r` and pick a line that ships this platform (arm64 needs newer lines)',
-      });
+      throw new SdkvmError(
+        `No Node.js ${formatNodeVersion(version)} archive for ${platform.os}/${platform.arch}${musl ? ' (musl)' : ''}`,
+        {
+          hint: musl
+            ? `Official musl builds exist from v24.21.0 / v26.8.0 onward — pick a newer line: sdkvm node ls -r`
+            : 'Run `sdkvm node ls -r` and pick a line that ships this platform (arm64 needs newer lines)',
+        },
+      );
     }
     const archive = filename.endsWith('.zip') ? ('zip' as const) : filename.endsWith('.tar.xz') ? ('tar.xz' as const) : ('tar.gz' as const);
     const display = formatNodeVersion(version);

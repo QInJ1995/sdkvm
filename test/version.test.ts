@@ -515,4 +515,29 @@ describe('用户输入 v / go 前缀', () => {
     expect(parseNodeUserSpec('v22.11.0')).toEqual(parseNodeUserSpec('22.11.0'));
     expect(parseNodeUserSpec('v22')).toEqual(parseNodeUserSpec('22'));
   });
+
+  // README：所有 SDK 的版本输入都容忍 v 前缀（回归：flutter/maven/miniconda/python 曾漏接）
+  it('flutter：v3.47 / v3.49.0-0.1.pre 与无前缀等价（上游 tag 本身带 v）', () => {
+    expect(parseFlutterUserSpec('v3.47')).toEqual(parseFlutterUserSpec('3.47'));
+    expect(parseFlutterUserSpec('v3.49.0-0.1.pre')).toEqual(parseFlutterUserSpec('3.49.0-0.1.pre'));
+    expect(parseFlutterUserSpec('flutter-v3.47')).toEqual(parseFlutterUserSpec('flutter-3.47'));
+  });
+
+  it('maven：v3.9.9 与无前缀等价', () => {
+    expect(parseMavenUserSpec('v3.9.9')).toEqual(parseMavenUserSpec('3.9.9'));
+    expect(parseMavenUserSpec('v3.9')).toEqual(parseMavenUserSpec('3.9'));
+    expect(parseMavenUserSpec('maven-v3.9.9')).toEqual(parseMavenUserSpec('maven-3.9.9'));
+  });
+
+  it('miniconda：v26.7.1-1 与无前缀等价；py 标签不受影响', () => {
+    expect(parseMinicondaUserSpec('v26.7.1-1')).toEqual(parseMinicondaUserSpec('26.7.1-1'));
+    expect(parseMinicondaUserSpec('v26')).toEqual(parseMinicondaUserSpec('26'));
+    expect(parseMinicondaUserSpec('py313')).toEqual(parseMinicondaUserSpec('py313'));
+  });
+
+  it('python：v3.12.7 / v3.14.0rc2 与无前缀等价', () => {
+    expect(parsePythonUserSpec('v3.12.7')).toEqual(parsePythonUserSpec('3.12.7'));
+    expect(parsePythonUserSpec('v3.14.0rc2')).toEqual(parsePythonUserSpec('3.14.0rc2'));
+    expect(parsePythonUserSpec('cpython-v3.12')).toEqual(parsePythonUserSpec('cpython-3.12'));
+  });
 });

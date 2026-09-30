@@ -169,11 +169,26 @@ try {
 
   New-Item -ItemType Directory -Force -Path (Join-Path $Root 'runtime'), $BinDir | Out-Null
   $runtimeDir = Join-Path $Root 'runtime'
-  if (Test-Path (Join-Path $runtimeDir $nodeName)) { Remove-Item -Recurse -Force (Join-Path $runtimeDir $nodeName) }
+  # runtime 先解压到 runtime.next 校验再挪进位（install.sh 同款）：直接解压进 runtime\
+  # 中途失败会留下残缺的 node 目录，current junction 指着它，shim 一运行就报 loader 错
+  $runtimeNext = Join-Path $Root 'runtime.next'
+  if (Test-Path $runtimeNext) { Remove-Item -Recurse -Force $runtimeNext }
+  New-Item -ItemType Directory -Path $runtimeNext | Out-Null
   # PS 5.1 里原生命令非零退出不触发 $ErrorActionPreference，必须显式查 $LASTEXITCODE
-  tar -xf (Join-Path $tmpdir $nodeArchive) -C $runtimeDir
-  if ($LASTEXITCODE -ne 0) { throw "sdkvm: failed to extract the Node.js archive (tar exit $LASTEXITCODE)" }
-  if (-not (Test-Path -LiteralPath (Join-Path $runtimeDir $nodeName))) { throw "sdkvm: Node.js archive did not extract $nodeName" }
+  tar -xf (Join-Path $tmpdir $nodeArchive) -C $runtimeNext
+  if ($LASTEXITCODE -ne 0) {
+    Remove-Item -Recurse -Force $runtimeNext -ErrorAction SilentlyContinue
+    throw "sdkvm: failed to extract the Node.js archive (tar exit $LASTEXITCODE)"
+  }
+  # Windows 归档布局：node.exe 在 $nodeName 根目录（无 bin/）
+  if (-not (Test-Path -LiteralPath (Join-Path $runtimeNext (Join-Path $nodeName 'node.exe')))) {
+    Remove-Item -Recurse -Force $runtimeNext -ErrorAction SilentlyContinue
+    throw "sdkvm: Node.js archive did not extract $nodeName node.exe"
+  }
+  # 新副本已校验后才动旧目录：同版本重装时删除失败/被杀，runtime.next 里的完好副本仍在
+  if (Test-Path (Join-Path $runtimeDir $nodeName)) { Remove-Item -Recurse -Force (Join-Path $runtimeDir $nodeName) }
+  Move-Item (Join-Path $runtimeNext $nodeName) (Join-Path $runtimeDir $nodeName)
+  Remove-Item -Recurse -Force $runtimeNext -ErrorAction SilentlyContinue
   $current = Join-Path $runtimeDir 'current'
   # current 若是真实目录（非 junction）可能是用户自己放的内容，不能当链接摘除
   if ((Test-Path -LiteralPath $current) -and -not ((Get-Item -LiteralPath $current -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {

@@ -30,6 +30,9 @@ export async function run(
     const detail = (e.stderr || e.message || '').split('\n')[0];
     throw new SdkvmError(`Failed to run ${cmd}: ${detail}`, {
       hint: `args: ${args.join(' ')}`,
+      // 保留原始错误：execFile 的失败有两种——errno 字符串 code（spawn 层，
+      // 找不到/无权执行）与数字 code（进程自身非零退出），调用方靠它区分
+      cause: err,
     });
   }
 }

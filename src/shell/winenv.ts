@@ -64,7 +64,9 @@ export async function ensureUserPathWin(entry: string): Promise<void> {
     "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
     "$raw=[string]$k.GetValue('Path','',$fmt)",
     "$parts=@($raw -split ';' | Where-Object { $_ -ne '' })",
-    `if($parts -notcontains '${entry.replace(/'/g, "''")}'){`,
+    // 比较前先 Trim：regedit 等手工编辑过的条目常带首尾空白，精确比较会让
+    // 同一条目被判定为"不存在"而重复追加
+    `if(@($parts | ForEach-Object { $_.Trim() }) -notcontains '${entry.replace(/'/g, "''")}'){`,
     `  $parts += '${entry.replace(/'/g, "''")}'`,
     "  $k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     "}",
@@ -83,9 +85,11 @@ export async function removeFromUserPathWin(entry: string): Promise<void> {
     "if($null -eq $k.GetValue('Path', $null)){ exit 0 }",
     "$raw=[string]$k.GetValue('Path','',$fmt)",
     "$parts=@($raw -split ';' | Where-Object { $_ -ne '' })",
-    // 不含 entry 时直接退出：重写同样的值再广播 WM_SETTINGCHANGE 没有意义
-    `if($parts -notcontains '${escaped}'){ exit 0 }`,
-    `$parts=@($parts | Where-Object { $_ -ne '${escaped}' })`,
+    // 不含 entry 时直接退出：重写同样的值再广播 WM_SETTINGCHANGE 没有意义。
+    // 比较前先 Trim：regedit 手工编辑过的条目常带首尾空白，精确比较会漏掉
+    // 该删的条目，卸载后 PATH 里残留指向已删链接的空引用
+    `if(-not ($parts | Where-Object { $_.Trim() -eq '${escaped}' })){ exit 0 }`,
+    `$parts=@($parts | Where-Object { $_.Trim() -ne '${escaped}' })`,
     "$k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     ...broadcastPs(),
   ].join('\n');

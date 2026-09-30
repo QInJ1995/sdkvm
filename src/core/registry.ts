@@ -132,9 +132,22 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
       .map((j) => `  ${j.version.vendor}-${spec.formatVersion(j.version)}`)
       .join('\n');
     const want = parsed.kind === 'full' ? parsed.version : specInput;
+    // lts 筛选用内置静态表（离线可用），install 走厂商 API 动态解析：新 LTS 发布后
+    // 表未更新时会出现"装得上 use 不了"——已装里最大的 major 超过静态表已知的最大
+    // LTS major 时点破（不依赖用户恰好装过某个已知 LTS）
+    const ltsMajorOf = spec.supportsLts ? spec.isLtsMajor : undefined;
+    const installedMaxMajor = all.length > 0 ? Math.max(...all.map((j) => j.version.major)) : 0;
+    let knownMaxLts = 0;
+    for (let m = 1; m <= installedMaxMajor; m += 1) {
+      if (ltsMajorOf?.(m)) knownMaxLts = m;
+    }
+    const newerThanKnownLts = parsed.kind === 'lts' && knownMaxLts > 0 && installedMaxMajor > knownMaxLts;
     throw new SdkvmError(`No installed ${spec.label} matches "${specInput}"`, {
       hint:
         (all.length > 0 ? `Installed:\n${installedList}\n` : '') +
+        (newerThanKnownLts
+          ? 'A newer non-LTS-per-table major is installed — the built-in LTS table may lag behind a newly released LTS; use the exact version from the list above.\n'
+          : '') +
         `Install one first: ${cmdPath(type)} install ${want}`,
     });
   }

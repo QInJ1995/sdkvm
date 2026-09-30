@@ -4,6 +4,7 @@ import { EnvHttpProxyAgent, fetch as undiciFetch } from 'undici';
 import type { RequestInit, Response } from 'undici';
 import { SdkvmError } from '../util/errors.js';
 import { getVersion } from '../cli/misc.js';
+import { log } from '../ui/log.js';
 
 const UA = `sdkvm/${getVersion()} (npm sdkvm)`;
 /** 连接/响应头预算：只覆盖到 fetch 返回，body 阶段另有 BODY_TIMEOUT_MS。
@@ -29,29 +30,58 @@ function proxyEnvPresent(): boolean {
 }
 
 /** EnvHttpProxyAgent 的实验性警告（UNDICI-EHPA）会在每条命令的 stderr 打两行噪声。
- *  emitWarning 经 nextTick 延迟发射：构造前装过滤器，构造时排队的警告先出队被滤掉，
- *  再在队列尾还原——其余警告不受影响。按警告名精确匹配，绝不误吞。 */
+ *  emitWarning 经 nextTick 延迟发射，且构造出的警告 name 是 "Warning"、code 才是
+ *  "UNDICI-EHPA"——按 code 匹配（name 恒不匹配，是上一版的失效原因）。还原必须用
+ *  setImmediate：nextTick 回调与排队的警告同队列、FIFO 先还原，过滤器根本看不到警告。 */
 function silenceEhpaWarning(): void {
   const origEmit = process.emit.bind(process) as (event: string | symbol, ...args: unknown[]) => boolean;
   process.emit = ((event: string | symbol, ...args: unknown[]) => {
-    if (event === 'warning' && (args[0] as Error | undefined)?.name === 'UNDICI-EHPA') return true;
+    if (event === 'warning') {
+      const w = args[0] as (Error & { code?: unknown }) | undefined;
+      if (w && (w.code === 'UNDICI-EHPA' || w.name === 'UNDICI-EHPA')) return true;
+    }
     return origEmit(event, ...args);
   }) as typeof process.emit;
-  process.nextTick(() => {
+  setImmediate(() => {
     process.emit = origEmit as typeof process.emit;
   });
 }
 
+/** undici 的 EnvHttpProxyAgent 只读 http(s)_proxy、不读 ALL_PROXY（上游未实现）：
+ *  这里显式解析传入，优先级 http_proxy > HTTP_PROXY > all_proxy > ALL_PROXY，
+ *  低优先级变量不覆盖高优先级。socks 代理 undici 不支持，忽略并提示。 */
+export function envProxyFor(kind: 'http' | 'https'): string | undefined {
+  const direct = kind === 'http' ? ['http_proxy', 'HTTP_PROXY'] : ['https_proxy', 'HTTPS_PROXY'];
+  for (const key of [...direct, 'all_proxy', 'ALL_PROXY']) {
+    const value = (process.env[key] ?? '').trim();
+    if (!value) continue;
+    if (/^socks/i.test(value)) {
+      if (!warnedSocksProxy) {
+        warnedSocksProxy = true;
+        log.warn(`${key}=${value} is a SOCKS proxy, which undici does not support; it is ignored (connecting per the remaining proxy settings)`);
+      }
+      continue;
+    }
+    return value;
+  }
+  return undefined;
+}
+
+let warnedSocksProxy = false;
+
 let proxyAgent: EnvHttpProxyAgent | null | undefined;
 
-/** 惰性建进程级单例；初始化失败（坏变量值）退回直连，失败信息足够定位 */
+/** 惰性建进程级单例；初始化失败（坏变量值）退回直连并提示，不让用户误以为代理在工作 */
 function getProxyAgent(): EnvHttpProxyAgent | null {
   if (proxyAgent === undefined) {
     silenceEhpaWarning();
+    const httpProxy = envProxyFor('http');
+    const httpsProxy = envProxyFor('https');
     try {
-      proxyAgent = new EnvHttpProxyAgent();
-    } catch {
+      proxyAgent = new EnvHttpProxyAgent({ httpProxy, httpsProxy });
+    } catch (err) {
       proxyAgent = null;
+      log.warn(`ignoring the proxy environment variables (${(err as Error).message}); connecting directly`);
     }
   }
   return proxyAgent;

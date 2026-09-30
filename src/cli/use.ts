@@ -101,6 +101,9 @@ export async function useCommand(
         platform.os === 'windows' ? 'the user environment' : rc ?? 'the shell rc'
       }: ${envState.error.message}`,
     );
+    // 链接已切换，但环境变量/PATH 没跟上——新终端仍解析旧值，结果受影响。
+    // 退出码 0 的契约是"警告不影响结果"，这里必须如实报 1，脚本按退出码判断才不会误以为切换生效
+    process.exitCode = 1;
     if (platform.os !== 'windows') {
       log.warn('add this to your rc file manually:');
       // rcBlock 是 POSIX 语法，对 fish 不合法

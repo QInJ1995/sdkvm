@@ -15,3 +15,18 @@ export function detectRcFile(platform: 'mac' | 'linux' | 'windows'): string | nu
   if (base === 'fish') return null; // fish 语法不同，打印手动片段
   return null;
 }
+
+/** 写入时可能被用到的全部 rc 候选（含 fish）。卸载清理用：use 时按 $SHELL 写入，
+ *  用户此后换默认 shell（或从 $SHELL 不同的终端跑卸载）时，只清 detectRcFile 指到
+ *  的那一个会漏——标记块指向已删除的 current 链接，永久残留在另一个 rc 里。 */
+export function rcCandidates(platform: 'mac' | 'linux' | 'windows'): string[] {
+  if (platform === 'windows') return [];
+  const home = os.homedir();
+  return [
+    path.join(home, '.zshrc'),
+    path.join(home, '.bashrc'),
+    path.join(home, '.bash_profile'),
+    path.join(home, '.profile'),
+    path.join(home, '.config', 'fish', 'config.fish'),
+  ];
+}

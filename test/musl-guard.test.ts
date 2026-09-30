@@ -22,8 +22,11 @@ describe('musl 主机守卫（glibc-only 基线在解析期拒绝）', () => {
     await expect(minicondaVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
   });
 
-  it('nodejs: resolve throws a musl error', async () => {
-    await expect(nodejsVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
+  it('nodejs: aarch64 musl resolve throws (官方无 arm64 musl 构建)；x64 走官方 musl 归档', async () => {
+    // x64 不再前置拒绝：官方自 v24.21.0 起提供 linux-x64-musl（行为测试在 nodejs.test.ts）
+    await expect(nodejsVendor.resolve({ kind: 'latest' }, { os: 'linux', arch: 'aarch64' })).rejects.toThrow(
+      /musl/i,
+    );
   });
 
   it('guards do not fire for non-linux platforms', async () => {

@@ -286,7 +286,11 @@ function insertBlock(content: string, block: string): string {
     return content.slice(0, mirrors.start) + replacement + content.slice(mirrors.end);
   }
   if (mirrors) {
-    return `${content.slice(0, mirrors.end)}\n${block}${content.slice(mirrors.end)}`;
+    // END 标记必须独占一行（assertMarkers 按行全等匹配）：开标签后紧跟的不是换行
+    // （<mirrors></mirrors> 空对、单行文件）时，块尾必须补 \n，否则标记粘住后续
+    // 文本，此后所有 mrm 命令都报 unpaired marker，只能手工修文件
+    const rest = content.slice(mirrors.end);
+    return `${content.slice(0, mirrors.end)}\n${block}${rest.startsWith('\n') ? '' : '\n'}${rest}`;
   }
   const close = findTag(content, 'settings', true);
   if (!close) return content;
@@ -311,6 +315,14 @@ export function applyMrmBlock(content: string, mirror: { name: string; url: stri
   }
   assertMarkers(text);
   if (!findTag(text, 'settings', true)) {
+    // 自闭合根 <settings/> 是合法的最小 settings.xml：先展开成开闭对再走常规插块
+    const selfRoot = findTag(text, 'settings', false);
+    if (selfRoot?.selfClosing && mirror) {
+      const raw = text.slice(selfRoot.start, selfRoot.end);
+      const open = `${raw.slice(0, -1).replace(/\/\s*$/, '').replace(/\s+$/, '')}>`;
+      const expanded = `${text.slice(0, selfRoot.start)}${open}\n</settings>${text.slice(selfRoot.end)}`;
+      return applyMrmBlock(expanded, mirror);
+    }
     throw new SdkvmError('settings.xml has no </settings>', {
       hint:
         'Fix the file, or point sdkvm mrm at another settings.xml. ' +

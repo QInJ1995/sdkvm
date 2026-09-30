@@ -105,6 +105,20 @@ describe('registry', () => {
     expect(findInstalled('java', 'lts').version.major).toBe(21);
   });
 
+  it('lts 未命中且已装比静态表更新的 major 时，提示表可能过时（JDK 29 场景）', () => {
+    // LTS_MAJORS 静态表更新滞后：install lts（Adoptium API 动态）装上 29 后，
+    // use lts（静态表）匹配不到——hint 必须点破，而不是让用户循环重装
+    mkJdk('temurin-29.0.1+1');
+    let caught: unknown = null;
+    try {
+      findInstalled('java', 'lts');
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(SdkvmError);
+    expect(String((caught as SdkvmError).hint)).toMatch(/LTS table may lag/);
+  });
+
   it('node lts matches even majors that have entered LTS, not a Current even major', () => {
     fs.mkdirSync(path.join(home, 'nodes', 'nodejs-22.20.0'), { recursive: true });
     fs.mkdirSync(path.join(home, 'nodes', 'nodejs-21.0.0'), { recursive: true });

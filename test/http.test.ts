@@ -162,4 +162,85 @@ describe('显式代理环境变量走 undici per-request dispatcher', () => {
       vi.resetModules();
     }
   });
+
+  it('仅设 ALL_PROXY 时也把该值传给 EnvHttpProxyAgent（undici 自己不读 ALL_PROXY）', async () => {
+    const agentOpts: unknown[] = [];
+    vi.doMock('undici', async (importOriginal) => {
+      const orig = await importOriginal<typeof import('undici')>();
+      return {
+        ...orig,
+        EnvHttpProxyAgent: class {
+          constructor(opts: unknown) {
+            agentOpts.push(opts);
+          }
+        },
+        fetch: vi.fn(async () => new Response('via-all-proxy')),
+      };
+    });
+    vi.resetModules();
+    process.env.ALL_PROXY = 'http://127.0.0.1:7890';
+    try {
+      const { httpText: freshHttpText } = await import('../src/net/http.js');
+      await expect(freshHttpText('https://behind-all-proxy.example/x')).resolves.toBe('via-all-proxy');
+      expect(agentOpts).toHaveLength(1);
+      expect(agentOpts[0]).toMatchObject({
+        httpProxy: 'http://127.0.0.1:7890',
+        httpsProxy: 'http://127.0.0.1:7890',
+      });
+    } finally {
+      delete process.env.ALL_PROXY;
+      vi.doUnmock('undici');
+      vi.resetModules();
+    }
+  });
+
+  it('HTTPS_PROXY 优先于 ALL_PROXY，坏值构造失败退回直连并警告', async () => {
+    const warnings: string[] = [];
+    const origWarn = console.error;
+    console.error = (...args: unknown[]) => warnings.push(String(args[0]));
+    try {
+      vi.resetModules();
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:1';
+      process.env.all_proxy = 'http://127.0.0.2:2';
+      {
+        const { envProxyFor } = await import('../src/net/http.js');
+        expect(envProxyFor('https')).toBe('http://127.0.0.1:1');
+        expect(envProxyFor('http')).toBe('http://127.0.0.2:2'); // http 无专值，取 all_proxy
+      }
+
+      // 坏代理值：EnvHttpProxyAgent 构造抛错 → 退回直连 + warn（回归：曾静默吞掉）。
+      // agent 为 null 时走全局 fetch（而非 undici 的），必须 stub 全局
+      const dispatchers: unknown[] = [];
+      vi.doMock('undici', async (importOriginal) => {
+        const orig = await importOriginal<typeof import('undici')>();
+        return {
+          ...orig,
+          EnvHttpProxyAgent: class {
+            constructor() {
+              throw new Error('Invalid URL');
+            }
+          },
+        };
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: { dispatcher?: unknown }) => {
+          dispatchers.push(init?.dispatcher);
+          return new Response('direct');
+        }),
+      );
+      vi.resetModules();
+      process.env.HTTPS_PROXY = ':::';
+      const { httpText: freshHttpText } = await import('../src/net/http.js');
+      await expect(freshHttpText('https://broken-proxy.example/x')).resolves.toBe('direct');
+      expect(dispatchers[0]).toBeFalsy(); // 无代理 dispatcher = 直连
+      expect(warnings.some((w) => /ignoring the proxy/i.test(w))).toBe(true);
+    } finally {
+      delete process.env.HTTPS_PROXY;
+      delete process.env.all_proxy;
+      console.error = origWarn;
+      vi.doUnmock('undici');
+      vi.resetModules();
+    }
+  });
 });

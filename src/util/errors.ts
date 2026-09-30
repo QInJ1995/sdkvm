@@ -2,12 +2,15 @@
 export class SdkvmError extends Error {
   readonly exitCode: number;
   readonly hint?: string;
+  /** 底层原始错误。如 execFile 失败：errno 字符串 code = 启动失败，数字 code = 非零退出 */
+  readonly cause?: unknown;
 
-  constructor(message: string, opts: { exitCode?: number; hint?: string } = {}) {
+  constructor(message: string, opts: { exitCode?: number; hint?: string; cause?: unknown } = {}) {
     super(message);
     this.name = 'SdkvmError';
     this.exitCode = opts.exitCode ?? 1;
     this.hint = opts.hint;
+    this.cause = opts.cause;
   }
 }
 

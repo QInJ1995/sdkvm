@@ -65,7 +65,7 @@ export function formatNrmListLine(name: string, url: string, current: boolean): 
 export type NpmRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 export type RegistryProbe = (url: string) => Promise<number>;
 
-async function defaultNpmRunner(args: string[]): Promise<{ stdout: string; stderr: string }> {
+export async function defaultNpmRunner(args: string[]): Promise<{ stdout: string; stderr: string }> {
   try {
     const { cmd, prefixArgs } = npmExec();
     return await run(cmd, [...prefixArgs, ...args]);
@@ -73,8 +73,12 @@ async function defaultNpmRunner(args: string[]): Promise<{ stdout: string; stder
     if (err instanceof SdkvmError && /npm is not available/.test(err.message)) {
       throw err; // npmExec 已给出安装引导提示
     }
+    // run() 会把两类失败合流：errno 字符串 code（spawn 不到可执行文件——npm 确实
+    // 没装）与数字 code（npm 自身非零退出，如只读 .npmrc、磁盘满）。只有前者该
+    // 报"npm is not available"，后者原样上抛——误标会把排障方向带偏
+    const cause = (err as { cause?: { code?: unknown } }).cause;
+    if (err instanceof SdkvmError && typeof cause?.code !== 'string') throw err;
     if (err instanceof SdkvmError) {
-      // 调用层面的失败（如找不到可执行文件）统一给安装引导提示
       throw new SdkvmError('npm is not available', {
         hint: `Check your Node.js/npm installation. Detail: ${err.message}`,
       });

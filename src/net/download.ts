@@ -172,13 +172,18 @@ export async function downloadFile(
     clearTimeout(timer);
   }
 
-  if (bytes === 0) {
-    fs.rmSync(partFile, { force: true });
-    throw new SdkvmError(`Download incomplete: 0 bytes`, { hint: url });
-  }
-  if (total !== null && !encoded && bytes !== total) {
-    fs.rmSync(partFile, { force: true });
-    throw new SdkvmError(`Download incomplete: ${bytes}/${total} bytes`, { hint: url });
+  if (bytes === 0 || (total !== null && !encoded && bytes !== total)) {
+    // 清理失败不能盖掉真正的失败原因（Windows 上杀软可能正锁着 .part）：
+    // 与上面 catch 路径一致吞掉，残留交给安装时的按龄清扫
+    try {
+      fs.rmSync(partFile, { force: true });
+    } catch {
+      // 留给安装时的按龄清扫
+    }
+    throw new SdkvmError(
+      bytes === 0 ? `Download incomplete: 0 bytes` : `Download incomplete: ${bytes}/${total} bytes`,
+      { hint: url },
+    );
   }
   // 与安装目录落位一致：Windows 上杀毒可能短暂锁住刚写完的 .part
   await renameWithRetry(partFile, destFile);

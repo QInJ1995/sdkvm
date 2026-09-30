@@ -5,7 +5,7 @@ import { clearCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { detectPlatform } from '../core/platform.js';
-import { detectRcFile } from '../shell/detect.js';
+import { detectRcFile, rcCandidates } from '../shell/detect.js';
 import { removeRcBlockFromFile } from '../shell/rc.js';
 import { removeFromUserPathWin, removeEnvWin, sdkPathEntries } from '../shell/winenv.js';
 import { log } from '../ui/log.js';
@@ -61,13 +61,20 @@ export async function uninstallCommand(
         }
         log.warn(`removed ${spec.envVar} and its PATH entries (uninstalled the current ${spec.label})`);
       } else {
+        // 清全部 rc 候选而非仅 $SHELL 指到的那个：use 写入与卸载运行时的 $SHELL 可能不同
+        // （换过默认 shell / IDE 终端），只清一个会把指向已删链接的标记块留在另一个 rc 里。
+        // removeRcBlockFromFile 对没有块的文件是 no-op，多清无害
+        const cleaned: string[] = [];
+        for (const rc of rcCandidates(platform.os)) {
+          removeRcBlockFromFile(rc, type);
+          cleaned.push(rc);
+        }
         const rc = detectRcFile(platform.os);
         if (rc) {
-          removeRcBlockFromFile(rc, type);
           log.warn(`removed the ${type} block from ${rc} (uninstalled the current ${spec.label})`);
         } else {
           log.warn(
-            `uninstalled the current ${spec.label}; remove ${spec.envVar} from your shell rc manually`,
+            `uninstalled the current ${spec.label}; swept the ${type} block from all shell rc files (${cleaned.join(', ')})`,
           );
         }
       }

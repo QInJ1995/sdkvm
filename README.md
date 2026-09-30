@@ -84,7 +84,7 @@
 | Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu 按宿主 libc 匹配——glibc 主机选 glibc 构建,Alpine/musl 主机选 musl 变体 |
 | Go | [go.dev/dl](https://go.dev/dl/) | 全历史稳定版 | `latest`、`1.24`、`1.24.5` |
 | Flutter | 官方发布清单 | stable / beta | macOS 双架构;Linux / Windows 仅 x64;beta 需完整 prerelease |
-| Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts`(当前 24 Krypton)/ `latest` / major 线 / 精确版本 | npm 随所选版本一起切换 |
+| Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts`(当前 24 Krypton)/ `latest` / major 线 / 精确版本 | npm 随所选版本一起切换;Linux x64 在 musl 主机(Alpine)自动选用官方 musl 构建(自 v24.21.0 / v26.8.0 起提供),aarch64-musl 官方未发布 |
 | Maven | [Maven Central](https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/) | 3.0 起全部稳定版,预发布需精确版本 | 无 `lts` 别名 |
 | Miniconda | [repo.anaconda.com/miniconda](https://repo.anaconda.com/miniconda/) | `26` / `26.7` / `py313` / `py313_26.7.1-1` / `latest` | 安装器约 150 MB,静默安装视为接受 [Miniconda 条款](https://www.anaconda.com/legal) |
 | Python | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) | `3` / `3.12` / `3.12.7` / `3.14.0rc2` / `latest` | 预编译 CPython,归档约 20–40 MB,与 Miniconda 互不影响 |
@@ -320,6 +320,8 @@ sdkvm python use 3.12
 
 匹配规则:
 
+- 各 SDK 的版本输入都容忍 `v` 前缀(`flutter use v3.47.5`、`python use v3.12`),
+  可直接粘贴 `node --version` / `go version` 的输出;`install` 同样适用。
 - 不带厂商前缀的 `use <major>`(如 `use 21`)选择该 major 下**全部发行版中**最新的
   已安装版本;需要固定某个发行版时,用 `vendor-` 前缀或 `--vendor`。
 - Java 的精确版本按前缀匹配:`21.0.5` 可以命中 `21.0.5+11`;反向亦可
@@ -387,8 +389,9 @@ python: cpython-3.12.7
 
 - 卸载**非当前**版本:仅删除该版本目录,其它版本与当前链接不受影响。
 - 卸载**当前**版本:先删除目录,再清除对应的 `current-*` 链接——macOS / Linux
-  同时移除 rc 文件里该 SDK 的 sdkvm 标记块,Windows 同时清理对应环境变量与用户
-  PATH 条目——然后提示选择其它版本。
+  同时清扫全部 rc 候选文件(`.zshrc` / `.bashrc` / `.bash_profile` / `.profile` /
+  fish)里该 SDK 的 sdkvm 标记块,避免换过默认 shell 后残留指向已删链接的块;
+  Windows 同时清理对应环境变量与用户 PATH 条目——然后提示选择其它版本。
 - 版本不存在时给出已安装版本提示,并以退出码 1 结束。
 
 ### `sdkvm mirror [action] [nameOrVendor] [url]`
@@ -681,8 +684,10 @@ Miniconda 追加 `%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、
   `latest_sha256`;Corretto 精确历史版本无公开校验源,安装时警告并跳过。
 - **强制校验**场景:配置了镜像的下载,以及 Miniconda 这类下载后要**执行**的
   安装器——拿不到任何可核对的哈希时直接失败,不降级放行。
-- 校验源不可达时的回退顺序:官方旁路文件(如 Temurin `.json`、Maven `.sha512`)
-  → 镜像上的同一文件;两侧都不可达或哈希不一致则安装失败。
+- 校验源只认官方:官方旁路文件(如 Temurin `.json`、Maven `.sha512`)不可达时,
+  最多降级到官方 `.sha1`(Maven 3.8 及更早),**绝不改信镜像上的同名文件**——镜像
+  旁路与归档同受镜像控制,由它定义期望值则校验形同虚设。官方源拿不到哈希时:
+  走镜像或执行安装器的场景直接失败,其余场景警告后跳过校验;哈希不一致一律失败。
 - 下载空闲超时 60 秒(无数据即断,不限总时长);校验请求自动重试。
 - 解压后校验单一根目录与预期可执行文件;解压目标永远是全新的空目录,归档内
   条目(含符号链接)不得越出该目录。任何失败路径都会清除 `cache/` 与 `tmp/`
@@ -889,8 +894,9 @@ fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVE
 ### 代理
 
 CLI 下载(安装包、版本清单)会读取标准代理变量:`HTTPS_PROXY` / `HTTP_PROXY`
-(含小写)、`ALL_PROXY` 与 `NO_PROXY`。注意 `sdkvm node`/`nrm` 切换的是 **npm**
-的 registry,npm 自身的代理仍由 npm 配置管理。
+(含小写)、`ALL_PROXY` 与 `NO_PROXY`;`ALL_PROXY` 优先级低于对应协议的专用变量,
+且 `socks://` 值不受支持(忽略并警告,直连回退)。注意 `sdkvm node`/`nrm` 切换的
+是 **npm** 的 registry,npm 自身的代理仍由 npm 配置管理。
 
 ### CI 或多用户隔离
 

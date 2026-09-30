@@ -151,6 +151,34 @@ describe('applyMrmBlock', () => {
     expect(xml).not.toMatch(/<mirrors\s*\/>/);
   });
 
+  it('keeps the END marker on its own line when <mirrors> is followed by a non-newline', () => {
+    // <mirrors></mirrors> 空对（IDE 生成/手写最小文件）：块尾不补换行会把 END 标记
+    // 粘到 </mirrors> 上，此后所有 mrm 命令都报 unpaired marker（回归）
+    for (const before of [
+      '<settings>\n  <mirrors></mirrors>\n</settings>\n',
+      '<settings><mirrors></mirrors></settings>',
+      '<settings>\n  <mirrors> <!-- c --></mirrors>\n</settings>\n',
+    ]) {
+      const xml = applyMrmBlock(before, { name: 'aliyun', url: 'https://maven.aliyun.com/repository/public/' });
+      expect(xml).toContain(`${MRM_END}\n`);
+      // 第二次操作必须还能找到配对标记（修复前这里抛 unpaired marker）
+      const again = applyMrmBlock(xml, { name: 'huawei', url: 'https://repo.huaweicloud.com/repository/maven/' });
+      expect(again).toContain('huawei');
+      expect(again).not.toContain('aliyun');
+    }
+  });
+
+  it('expands a self-closing settings root', () => {
+    const xml = applyMrmBlock('<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"/>\n', {
+      name: 'aliyun',
+      url: 'https://maven.aliyun.com/repository/public/',
+    });
+    expect(xml).toContain('<mirrors>');
+    expect(xml).toContain('<id>sdkvm</id>');
+    expect(xml).toContain('</settings>');
+    expect(xml).not.toMatch(/<settings[^>]*\/>/);
+  });
+
   it('ignores </settings> that only appears inside a comment', () => {
     expect(() => applyMrmBlock('<settings>\n  <!-- </settings> -->\n', null)).toThrow(/no <\/settings>/);
   });

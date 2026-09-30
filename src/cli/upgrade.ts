@@ -113,15 +113,21 @@ async function swapCliPackage(unpacked: string, home: string): Promise<void> {
   const staging = path.join(home, 'cli.next');
   const bak = path.join(home, 'cli.bak');
   const cli = path.join(home, 'cli');
-  try {
-    fs.rmSync(bak, { recursive: true, force: true });
-  } catch (err) {
-    // 旧 bak 清不掉（杀软锁住）：继续换位会把旧 cli move 进残留 bak 形成嵌套坏布局
-    throw new SdkvmError(`cannot clear the stale ${bak}: ${(err as Error).message}`, {
-      hint: 'Usually a transient antivirus/indexer lock. Retry in a moment; cli.next was left for the retry.',
-    });
+  // 上次换位中途被硬杀（SIGKILL/断电）会停在"cli 缺失、bak 是唯一工作 CLI"的状态：
+  // 此时绝不能先清 bak——新 CLI 落位一旦失败，回滚无物可回，CLI 再也无法启动自救。
+  // 顺序：cli 存在 → 先清旧 bak（move 目标必须干净），再 cli→bak；
+  //       cli 缺失 → 跳过 bak，直接落位新 CLI，成功后才清 bak。
+  if (fs.existsSync(cli)) {
+    try {
+      fs.rmSync(bak, { recursive: true, force: true });
+    } catch (err) {
+      // 旧 bak 清不掉（杀软锁住）：继续换位会把旧 cli move 进残留 bak 形成嵌套坏布局
+      throw new SdkvmError(`cannot clear the stale ${bak}: ${(err as Error).message}`, {
+        hint: 'Usually a transient antivirus/indexer lock. Retry in a moment; cli.next was left for the retry.',
+      });
+    }
+    await renameWithRetry(cli, bak);
   }
-  if (fs.existsSync(cli)) await renameWithRetry(cli, bak);
   try {
     await renameWithRetry(unpacked, cli);
   } catch (err) {
@@ -172,19 +178,21 @@ export function windowsUpgradeScript(): string {
     'for %%i in ("%~dp0.") do set "HOME=%%~fi"',
     'rem 等本进程退出。ping 在 stdin 被重定向时也能当 sleep 用；timeout 命令会立刻报错',
     'ping -n 3 127.0.0.1 >nul',
+    'set "MOVED=0"',
+    'set "SWAP=0"',
+    // cli 缺失 = 上次换位中途被硬杀：bak 是唯一工作副本，绝不能先删——直接落位新 CLI，
+    // 成功后再清 bak；失败时 rollback 会把 bak 恢复成 cli（与 swapCliPackage 同款顺序）
+    'if not exist "%HOME%\\cli" goto :swap',
     // 旧 bak 清不掉就中止：move /y 到已存在的目录会把 cli 嵌套进 bak（cmd 语义），
     // 产出 cli.bak\\cli\\... 的坏布局。cli.next 保留，重试时脚本会重来
-    'if not exist "%HOME%\\cli.bak" goto :nobak',
+    'if not exist "%HOME%\\cli.bak" goto :movecli',
     'rmdir /s /q "%HOME%\\cli.bak"',
     'if exist "%HOME%\\cli.bak" (',
     '  echo sdkvm: cannot clear stale cli.bak (antivirus lock?); upgrade aborted 1>&2',
     '  echo rollbackfail>"%HOME%\\upgrade-apply.status"',
     '  exit /b 1',
     ')',
-    ':nobak',
-    'set "MOVED=0"',
-    'set "SWAP=0"',
-    'if not exist "%HOME%\\cli" goto :swap',
+    ':movecli',
     'move /y "%HOME%\\cli" "%HOME%\\cli.bak" >nul && set "MOVED=1"',
     'if "%MOVED%"=="0" (',
     '  rem 杀软/索引器可能短暂锁住目录：等 1 秒重试一次',
@@ -263,25 +271,28 @@ export async function upgradeCommand(): Promise<void> {
     // 无状态文件：上次升级成功或从未计划过
   }
 
-  await withLock(async () => {
-    const sumsUrl = releaseAssetUrl(RELEASE_SUMS);
-    const assetUrl = releaseAssetUrl(RELEASE_ASSET);
-    log.info(`checking ${assetUrl}`);
-    const expected = checksumFor(await httpText(sumsUrl), RELEASE_ASSET);
-    if (!expected) {
-      throw new SdkvmError(`No checksum for ${RELEASE_ASSET}`, { hint: sumsUrl });
+  // 校验和 + 归档下载在锁外（install.ts 同款：长下载不阻塞 use/uninstall/ls——
+  // sweepStaleParts 按龄清扫，别的进程正在写的 .part 每个块都刷 mtime，不会误伤）；
+  // 解压与换位写共享的 cli.next/cli 目录，必须持锁
+  const sumsUrl = releaseAssetUrl(RELEASE_SUMS);
+  const assetUrl = releaseAssetUrl(RELEASE_ASSET);
+  log.info(`checking ${assetUrl}`);
+  const expected = checksumFor(await httpText(sumsUrl), RELEASE_ASSET);
+  if (!expected) {
+    throw new SdkvmError(`No checksum for ${RELEASE_ASSET}`, { hint: sumsUrl });
+  }
+  fs.mkdirSync(paths.cache(), { recursive: true });
+  // 顺手清掉历史下载残留（kill -9 留下的 .part 永远不会再被复用）
+  sweepStaleParts();
+  const dest = path.join(paths.cache(), RELEASE_ASSET);
+  try {
+    const downloaded = await downloadFile(assetUrl, dest);
+    if (downloaded.sha256 !== expected) {
+      throw new SdkvmError(`Checksum mismatch for ${RELEASE_ASSET}`, {
+        hint: `expected ${expected}, got ${downloaded.sha256}`,
+      });
     }
-    fs.mkdirSync(paths.cache(), { recursive: true });
-    // 顺手清掉历史下载残留（kill -9 留下的 .part 永远不会再被复用）
-    sweepStaleParts();
-    const dest = path.join(paths.cache(), RELEASE_ASSET);
-    try {
-      const downloaded = await downloadFile(assetUrl, dest);
-      if (downloaded.sha256 !== expected) {
-        throw new SdkvmError(`Checksum mismatch for ${RELEASE_ASSET}`, {
-          hint: `expected ${expected}, got ${downloaded.sha256}`,
-        });
-      }
+    await withLock(async () => {
       const before = getVersion();
       const home = sdkvmHome();
       // 统一先解压到 cli.next 并读出新版本：相同版本直接收工，不再空换一轮目录
@@ -306,14 +317,14 @@ export async function upgradeCommand(): Promise<void> {
       log.ok(
         `upgraded CLI ${before} → ${after} in ${path.join(home, 'cli')}; runtime and installed SDKs were left in place`,
       );
-    } finally {
-      // swap 已完成时缓存删除失败绝不能把成功升级报成失败；下载/校验失败时也只
-      // 降级为警告，不覆盖原始错误（install.ts 的 finally 同款语义）
-      try {
-        fs.rmSync(dest, { force: true });
-      } catch (err) {
-        log.warn(`could not remove the downloaded cache file ${dest}: ${(err as Error).message}`);
-      }
+    });
+  } finally {
+    // swap 已完成时缓存删除失败绝不能把成功升级报成失败；下载/校验失败时也只
+    // 降级为警告，不覆盖原始错误（install.ts 的 finally 同款语义）
+    try {
+      fs.rmSync(dest, { force: true });
+    } catch (err) {
+      log.warn(`could not remove the downloaded cache file ${dest}: ${(err as Error).message}`);
     }
-  });
+  }
 }

@@ -131,6 +131,18 @@ describe('windowsUpgradeScript', () => {
     expect(tail).toContain('exit /b 2');
     expect(tail).not.toContain('del "%~f0"');
   });
+
+  it('cli 缺失时先落位新 CLI、绝不先删唯一备份（顺序回归）', () => {
+    const body = windowsUpgradeScript();
+    // cli 存在性检查必须出现在清 bak 之前：恢复场景（cli 缺失、bak 是唯一工作 CLI）
+    // 直接 goto :swap，rmdir bak 只在成功落位后执行
+    const cliCheck = body.indexOf('if not exist "%HOME%\\cli" goto :swap');
+    const clearBak = body.indexOf('rmdir /s /q "%HOME%\\cli.bak"');
+    const swapLabel = body.indexOf('\n:swap');
+    expect(cliCheck).toBeGreaterThan(0);
+    expect(clearBak).toBeGreaterThan(cliCheck);
+    expect(swapLabel).toBeGreaterThan(clearBak);
+  });
 });
 
 describe('replaceCliPackage', () => {
@@ -166,6 +178,24 @@ describe('replaceCliPackage', () => {
 
     await expect(replaceCliPackage(archive, home)).rejects.toThrow(/missing package\/package\.json/);
     expect(fs.readFileSync(path.join(home, 'cli', 'package.json'), 'utf8')).toContain('0.0.1');
+    expect(fs.existsSync(path.join(home, 'cli.next'))).toBe(false);
+  });
+
+  it('cli 缺失（上次换位被硬杀）时直接落位新 CLI，不动唯一备份 bak', async () => {
+    // 恢复场景：cli 不存在，cli.bak 是唯一工作 CLI。
+    // 修复前：先 rm bak 再落位——落位失败（AV 锁）则回滚无物，CLI 无法启动自救
+    fs.mkdirSync(path.join(home, 'cli.bak'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'cli.bak', 'package.json'), '{"version":"0.0.1"}\n');
+
+    const stage = path.join(home, 'stage', 'package');
+    fs.mkdirSync(stage, { recursive: true });
+    fs.writeFileSync(path.join(stage, 'package.json'), '{"version":"1.2.3"}\n');
+    const archive = path.join(home, 'sdkvm.tgz');
+    execFileSync('tar', ['-czf', archive, '-C', path.join(home, 'stage'), 'package']);
+
+    await replaceCliPackage(archive, home);
+    expect(fs.readFileSync(path.join(home, 'cli', 'package.json'), 'utf8')).toContain('1.2.3');
+    expect(fs.existsSync(path.join(home, 'cli.bak'))).toBe(false);
     expect(fs.existsSync(path.join(home, 'cli.next'))).toBe(false);
   });
 });
