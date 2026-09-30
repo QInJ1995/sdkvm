@@ -81,7 +81,7 @@
 
 | SDK | 来源 | 版本能力 | 说明 |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu 按宿主 libc 匹配——glibc 主机选 glibc 构建,Alpine/musl 主机选 musl 变体 |
+| Java | [Temurin](https://adoptium.net/)、[Zulu](https://www.azul.com/downloads/)、[Corretto](https://aws.amazon.com/corretto/) | `lts` 当前为 8 / 11 / 17 / 21 / 25;支持精确版本与 `+build` | 三发行版并存,`use` 可跨发行版切换;Corretto 仅发布 LTS 线;Linux 上 Zulu、Temurin、Corretto 按宿主 libc 匹配——glibc 主机选 glibc 构建,Alpine/musl 主机选官方 musl / alpine 构建 |
 | Go | [go.dev/dl](https://go.dev/dl/) | 全历史稳定版 | `latest`、`1.24`、`1.24.5` |
 | Flutter | 官方发布清单 | stable / beta | macOS 双架构;Linux / Windows 仅 x64;beta 需完整 prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts`(当前 24 Krypton)/ `latest` / major 线 / 精确版本 | npm 随所选版本一起切换;Linux x64 在 musl 主机(Alpine)自动选用官方 musl 构建(自 v24.21.0 / v26.8.0 起提供),aarch64-musl 官方未发布 |

@@ -21,17 +21,32 @@ export function canonicalCorrettoVersion(input: string): string {
 
 const BASE = 'https://corretto.aws/downloads';
 
-/** latest 重定向入口的文件名（已验证：aarch64-macos / x64-linux / x64-windows） */
+/** Alpine/musl 主机要官方 alpine 构建。glibc 的 linux 包在 musl 上装上就起不来。 */
+function muslHost(platform: VendorPlatform): boolean {
+  return platform.os === 'linux' && hostLibc(platform.arch) === 'musl';
+}
+
+/**
+ * latest 重定向入口的文件名。
+ * 已核对：glibc 是 `{arch}-linux-jdk`，Alpine 是 `{arch}-alpine-jdk`（不是 alpine-linux），
+ * macOS 是 `{arch}-macos-jdk`，Windows 是 `{arch}-windows-jdk.zip`。
+ */
 function latestFileName(major: number, platform: VendorPlatform): string {
-  const osName = platform.os === 'mac' ? 'macos' : platform.os;
+  const osName = platform.os === 'mac' ? 'macos' : muslHost(platform) ? 'alpine' : platform.os;
   const ext = platform.os === 'windows' ? 'zip' : 'tar.gz';
   return `amazon-corretto-${major}-${platform.arch}-${osName}-jdk.${ext}`;
 }
 
-/** resources 直链的文件名（三平台命名规则不同，均已实测验证） */
+/**
+ * resources 直链的文件名。
+ * Alpine 资源名是 `alpine-linux-{arch}.tar.gz`，和 latest 入口的 `alpine-jdk` 不是同一套拼法。
+ */
 function resourceFileName(version: string, platform: VendorPlatform): string {
   if (platform.os === 'mac') return `amazon-corretto-${version}-macosx-${platform.arch}.tar.gz`;
-  if (platform.os === 'linux') return `amazon-corretto-${version}-linux-${platform.arch}.tar.gz`;
+  if (platform.os === 'linux') {
+    const osName = muslHost(platform) ? 'alpine-linux' : 'linux';
+    return `amazon-corretto-${version}-${osName}-${platform.arch}.tar.gz`;
+  }
   return `amazon-corretto-${version}-windows-${platform.arch}-jdk.zip`;
 }
 
@@ -48,17 +63,14 @@ function releaseChecksumUrl(version: string): string {
   return `https://api.github.com/repos/corretto/corretto-${major}/releases/tags/${encodeURIComponent(version)}`;
 }
 
-async function resolveLatestVersion(major: number, platform: VendorPlatform): Promise<string> {
+/** 404 表示这个 major 在当前平台没有构建，返回 null。网络错误和异常状态仍抛出。 */
+async function resolveLatestVersion(major: number, platform: VendorPlatform): Promise<string | null> {
   const url = `${BASE}/latest/${latestFileName(major, platform)}`;
   let res;
   try {
     res = await httpFetch(url, { redirect: 'manual' });
   } catch (err) {
-    if (err instanceof HttpError && err.status === 404) {
-      throw new SdkvmError(`No Corretto JDK ${major} build for ${platform.os}/${platform.arch}`, {
-        hint: `Corretto does not publish every major/platform combination. Run \`${cmdPath('java')} ls -r --vendor corretto\` to see the lines, or try another vendor: ${cmdPath('java')} install ${major} --vendor temurin`,
-      });
-    }
+    if (err instanceof HttpError && err.status === 404) return null;
     throw err;
   }
   if (res.status !== 301 && res.status !== 302 && res.status !== 307 && res.status !== 308) {
@@ -70,6 +82,15 @@ async function resolveLatestVersion(major: number, platform: VendorPlatform): Pr
     throw new SdkvmError(`Cannot parse Corretto version from redirect: ${location}`);
   }
   return m[1];
+}
+
+function requireLatestVersion(major: number, platform: VendorPlatform): Promise<string> {
+  return resolveLatestVersion(major, platform).then((version) => {
+    if (version) return version;
+    throw new SdkvmError(`No Corretto JDK ${major} build for ${platform.os}/${platform.arch}`, {
+      hint: `Corretto does not publish every major/platform combination. Run \`${cmdPath('java')} ls -r --vendor corretto\` to see the lines, or try another vendor: ${cmdPath('java')} install ${major} --vendor temurin`,
+    });
+  });
 }
 
 /**
@@ -114,6 +135,8 @@ export const correttoVendor: Vendor = {
       keys.map(async ({ key, lts }): Promise<ReleaseLine | null> => {
         try {
           const latest = await resolveLatestVersion(Number(key), platform);
+          // 404：这个 major 在当前平台没发。隐藏即可，不要当成列举失败去警告。
+          if (!latest) return null;
           return { key, lts, latestFullVersion: latest };
         } catch {
           failed.push(key);
@@ -131,11 +154,6 @@ export const correttoVendor: Vendor = {
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
-    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
-      throw new SdkvmError('Amazon Corretto publishes no musl/Alpine builds', {
-        hint: 'Use Temurin (sdkvm java install <version>), or the distro JDK (apk add openjdk21).',
-      });
-    }
     let version: string;
     let majorSha: string | null = null;
     if (spec.kind === 'lts') {
@@ -152,11 +170,11 @@ export const correttoVendor: Vendor = {
         );
         latestLts = Math.max(...LTS_MAJORS);
       }
-      version = await resolveLatestVersion(latestLts, platform);
+      version = await requireLatestVersion(latestLts, platform);
       majorSha = await fetchLatestSha256(latestLts, platform);
     } else if (spec.kind === 'major') {
       // 不再预判 major 是否存在：latest 重定向的 404 已给出准确错误
-      version = await resolveLatestVersion(spec.major, platform);
+      version = await requireLatestVersion(spec.major, platform);
       majorSha = await fetchLatestSha256(spec.major, platform);
     } else if (spec.kind === 'full') {
       const v = parseVersion('corretto', spec.version);

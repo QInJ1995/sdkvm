@@ -94,7 +94,7 @@ Design goals:
 
 | SDK | Source | Version support | Notes |
 | --- | --- | --- | --- |
-| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only; on Linux, Zulu matches the host libc — glibc hosts get glibc builds, Alpine/musl hosts get musl variants |
+| Java | [Temurin](https://adoptium.net/), [Zulu](https://www.azul.com/downloads/), [Corretto](https://aws.amazon.com/corretto/) | `lts` is currently 8 / 11 / 17 / 21 / 25; exact versions and `+build` | All three distributions coexist; `use` can switch across vendors; Corretto publishes LTS lines only; on Linux, Zulu, Temurin, and Corretto match the host libc — glibc hosts get glibc builds, Alpine/musl hosts get the official musl or alpine builds |
 | Go | [go.dev/dl](https://go.dev/dl/) | every historical stable release | `latest`, `1.24`, `1.24.5` |
 | Flutter | official release manifest | stable / beta | both macOS architectures; Linux / Windows are x64 only; beta needs the full prerelease |
 | Node.js | [nodejs.org/dist](https://nodejs.org/dist) | `lts` (currently 24 Krypton) / `latest` / major line / exact | npm switches together with the runtime |

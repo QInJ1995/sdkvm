@@ -503,6 +503,8 @@ describe('corretto', () => {
       expect(majors.map((m) => m.key)).toEqual(['8', '17', '21', '25']);
       expect(majors.every((m) => m.latestFullVersion === `${m.key}.0.8.9.1`)).toBe(true);
       expect(majors.find((m) => m.key === '25')?.lts).toBe(true);
+      // 当前平台没发的 major 只隐藏，不报「列举失败」
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('listing failed'))).toBe(false);
     } finally {
       warn.mockRestore();
     }
