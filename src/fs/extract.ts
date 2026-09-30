@@ -6,6 +6,12 @@ import type { Platform } from '../core/platform.js';
 
 const WIN_TAR = 'C:\\Windows\\System32\\tar.exe';
 
+/** 成员名含 `..` 时跳过。bsdtar 会拒绝并返回非零（前面的安全成员可能已经解出），
+ *  GNU tar 往往把文件写到目标目录外且退出码为 0。事后 assertContained 只遍历 dest，
+ *  看不见已经写出去的文件。单次 --exclude 避免再跑 tar -t（Flutter 这类大归档会解压两次）。
+ *  tar/unzip 的 exclude 通配符跨 `/`；版本号里的单个点（22.20.0）不含连续 `..`。 */
+const TAR_SLIP_EXCLUDE = ['--exclude', '*..*'] as const;
+
 /** 解压预算：外部 tar/unzip/powershell 卡死（杀软扫描挂起、坏归档死循环）时，
  *  没有超时会让进程永远挂住；2GB Flutter 解压正常也就几十秒，10 分钟足够宽 */
 const EXTRACT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -51,7 +57,9 @@ export async function extractArchive(
     // 回退 Expand-Archive——tar.gz/xz 没有第二条路，失败原样上抛
     if (fs.existsSync(WIN_TAR)) {
       try {
-        await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
+        await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir, ...TAR_SLIP_EXCLUDE], {
+          timeoutMs: EXTRACT_TIMEOUT_MS,
+        });
         return;
       } catch (err) {
         if (archiveType !== 'zip') throw err;
@@ -68,11 +76,16 @@ export async function extractArchive(
 
   if (archiveType === 'zip' && platform.rawPlatform === 'linux') {
     // Linux GNU tar 不支持 zip（正常情况下 Linux 无 zip 归档，防御性回退）
-    await run('unzip', ['-q', '-o', archiveFile, '-d', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
+    // Info-ZIP 会把 `../` 解到 -d 之外；macOS 自带 unzip 则改写成目标目录里的普通文件。-x 直接丢掉。
+    await run('unzip', ['-q', '-o', archiveFile, '-d', destDir, '-x', '*..*'], {
+      timeoutMs: EXTRACT_TIMEOUT_MS,
+    });
     return;
   }
   // macOS bsdtar / Linux GNU tar 均可 -xf 自动识别压缩格式
-  await run('tar', ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
+  await run('tar', ['-xf', archiveFile, '-C', destDir, ...TAR_SLIP_EXCLUDE], {
+    timeoutMs: EXTRACT_TIMEOUT_MS,
+  });
 }
 
 export function tmpExtractDir(base: string): string {
