@@ -277,6 +277,21 @@ function archStampMismatch(finalDir: string, platform: Platform): string | null 
   }
 }
 
+/**
+ * 下载落到 tmp/ 的文件名。并发安装各写各的文件，所以带 pid。
+ * sh/exe 安装器按 $0 的扩展名决定能不能跑：Miniconda 要求以 .sh 结尾，
+ * Windows 安装器也要 .exe。pid 放在扩展名前面，sweepStaleTmp 仍能认出它。
+ */
+export function downloadDestName(downloadUrl: string, archive: string, pid = process.pid): string {
+  const base = cacheFileName(downloadUrl);
+  if (archive === 'sh' || archive === 'exe') {
+    const ext = `.${archive}`;
+    const stem = base.toLowerCase().endsWith(ext) ? base.slice(0, -ext.length) : base;
+    return `${stem}.${pid}${ext}`;
+  }
+  return `${base}.${pid}`;
+}
+
 /** tmp/ 残留（kill -9/断电留下的 extract-* 解压目录与安装期归档）清扫。
  *  归档/解压都在锁外进行且文件名带 pid：优先按 pid 存活判断——活跃进程的文件绝不动
  *  （大归档解压超过按龄阈值也不能误删），pid 已死则不论新旧立即清；
@@ -293,9 +308,10 @@ export function sweepStaleTmp(): void {
   const cutoff = Date.now() - TMP_STALE_MS;
   for (const name of names) {
     const p = path.join(paths.tmp(), name);
-    // 名字以 .pid / -pid 结尾（可选 .part）：归档下载 `${cacheFileName}.${pid}`、
-    // 解压目录 extract-<ts>-<pid>、历史 .tmp-<pid>.part 三种形式一并覆盖
-    const pidMatch = /(?:^|[.-])(\d+)(?:\.part)?$/.exec(name);
+    // 名字以 .pid / -pid 结尾（可选 .part，或安装器的 .pid.sh / .pid.exe）：
+    // 归档下载 `${cacheFileName}.${pid}`、解压目录 extract-<ts>-<pid>、
+    // 历史 .tmp-<pid>.part 一并覆盖
+    const pidMatch = /(?:^|[.-])(\d+)(?:\.(?:sh|exe))?(?:\.part)?$/.exec(name);
     try {
       if (pidMatch) {
         const pid = Number(pidMatch[1]);
@@ -412,7 +428,7 @@ export async function installCommand(
 
   // dest 放 tmp/ 并带 pid：并发装同版本时各写各的归档，先完成方的 finally 清理
   // 不会删掉后来者正在校验/解压的文件（cache/ 按文件名共享时实测会撞）
-  const dest = path.join(paths.tmp(), `${cacheFileName(artifact.downloadUrl)}.${process.pid}`);
+  const dest = path.join(paths.tmp(), downloadDestName(artifact.downloadUrl, artifact.archive));
   const progress = createProgress(`↓ ${artifact.displayName}`);
   log.info(`downloading ${artifact.downloadUrl}`);
   let dl: Awaited<ReturnType<typeof downloadFile>>;

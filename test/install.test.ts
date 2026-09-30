@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { recoverInterruptedInstalls, sweepStaleParts, sweepStaleTmp } from '../src/cli/install.js';
+import { downloadDestName, recoverInterruptedInstalls, sweepStaleParts, sweepStaleTmp } from '../src/cli/install.js';
 import { detectPlatform } from '../src/core/platform.js';
 
 let home: string;
@@ -202,6 +202,22 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
   });
 });
 
+describe('downloadDestName', () => {
+  const shUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-py314_26.7.1-1-MacOSX-arm64.sh';
+  const exeUrl = 'https://repo.anaconda.com/miniconda/Miniconda3-py314_26.7.1-1-Windows-x86_64.exe';
+  const tarUrl = 'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.tar.gz';
+
+  it('sh/exe 把 pid 放在扩展名前面，让安装器按 $0 认得出自己', () => {
+    expect(downloadDestName(shUrl, 'sh', 78338)).toBe('Miniconda3-py314_26.7.1-1-MacOSX-arm64.78338.sh');
+    expect(downloadDestName(exeUrl, 'exe', 78338)).toBe('Miniconda3-py314_26.7.1-1-Windows-x86_64.78338.exe');
+    expect(downloadDestName(shUrl, 'sh', 78338).endsWith('.sh')).toBe(true);
+  });
+
+  it('普通归档仍把 pid 接在文件名末尾', () => {
+    expect(downloadDestName(tarUrl, 'tar.gz', 78338)).toBe('jdk-21.tar.gz.78338');
+  });
+});
+
 describe('sweepStaleTmp', () => {
   /** 同步跑完一个即刻退出的子进程：pid 已被 wait 回收，必然已死（跨平台、无竞态） */
   function reapedPid(): number {
@@ -232,6 +248,15 @@ describe('sweepStaleTmp', () => {
     sweepStaleTmp();
     expect(fs.existsSync(fresh)).toBe(false);
     expect(fs.existsSync(freshPart)).toBe(false);
+  });
+
+  it('安装器残留（.pid.sh / .pid.exe）按 pid 判断：死的清、活的留', () => {
+    const dead = reapedPid();
+    const gone = tmpEntry(`Miniconda3-py314_26.7.1-1-MacOSX-arm64.${dead}.sh`);
+    const kept = tmpEntry(`Miniconda3-py314_26.7.1-1-Windows-x86_64.${process.pid}.exe`, true);
+    sweepStaleTmp();
+    expect(fs.existsSync(gone)).toBe(false);
+    expect(fs.existsSync(kept)).toBe(true);
   });
 
   it('活 pid 的残留即使超过按龄阈值也不动', () => {
