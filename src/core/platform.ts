@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { SdkvmError } from '../util/errors.js';
 
 /** 三家 vendor 通用的平台描述 */
@@ -7,6 +8,16 @@ export interface Platform {
   /** Node 原始值，供特殊分支使用 */
   rawPlatform: NodeJS.Platform;
   rawArch: string;
+}
+
+/** 主机 libc 探测（仅 Linux 有意义）：musl 动态链接器存在即视为 musl（Alpine 等），
+ *  否则 glibc；非 Linux 返回 null。nodejs.org / python.org 的官方归档都是 glibc 构建，
+ *  vendor 在 musl 主机上要提前给出能读懂的错误，而不是装上后一跑就崩。 */
+export function hostLibc(arch: 'aarch64' | 'x64' = process.arch === 'arm64' ? 'aarch64' : 'x64'): 'glibc' | 'musl' | null {
+  if (process.platform !== 'linux') return null;
+  const loader = `/lib/ld-musl-${arch === 'aarch64' ? 'aarch64' : 'x86_64'}.so.1`;
+  if (fs.existsSync(loader) || fs.existsSync(`/usr${loader}`)) return 'musl';
+  return 'glibc';
 }
 
 export function detectPlatform(override?: { platform?: string; arch?: string }): Platform {

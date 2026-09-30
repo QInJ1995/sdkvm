@@ -48,9 +48,20 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
 export function currentSdk(type: SdkTypeId): InstalledSdk | null {
   const current = readCurrent(type);
   if (!current) return null;
-  // Windows 文件系统大小写不敏感：两次会话用不同大小写设置 SDKVM_HOME 时，
-  // 逐字节比较会把明明指向自己的 current 判成不匹配，跳过 rc/注册表清理
-  const norm = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  // 比较必须宽容文件系统等价拼写：
+  // - Windows 大小写不敏感：两次会话用不同大小写设置 SDKVM_HOME 时，
+  //   逐字节比较会把明明指向自己的 current 判成不匹配，跳过 rc/注册表清理
+  // - macOS 的 /tmp 是 /private/tmp 的符号链接：链接内容与 readdir 拼出的路径
+  //   拼写不同（use 时怎么写、uninstall 时怎么读取决于 SDKVM_HOME 的写法）
+  // realpath 失败（目标已删）时退回原拼写，别把悬空链接当匹配
+  const norm = (p: string): string => {
+    const lowered = process.platform === 'win32' ? p.toLowerCase() : p;
+    try {
+      return fs.realpathSync(lowered);
+    } catch {
+      return lowered;
+    }
+  };
   return (
     listInstalled(type).find(
       (j) =>

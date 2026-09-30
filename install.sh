@@ -25,7 +25,47 @@ esac
 node_name="node-v${RUNTIME_NODE_VERSION}-${node_os}-${node_arch}"
 node_archive="${node_name}.tar.gz"
 tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
+
+# 与 CLI（lock.ts）兼容的全局锁：同一 $ROOT/.lock 目录、同样 info.json{pid}。
+# 持有者活着就等（有界 60 秒）；pid 已死或目录 5 分钟没心跳则按 stale 偷掉——
+# 并发的 install.sh 不会互相写坏 runtime/cli，`sdkvm upgrade` 也不会撞车 cli.next
+LOCK_HELD=0
+lock_acquire() {
+  tries=0
+  while :; do
+    if mkdir "$ROOT/.lock" 2>/dev/null; then
+      printf '{"pid":%s,"startedAt":%s}\n' "$$" "$(date +%s000)" >"$ROOT/.lock/info.json" 2>/dev/null || :
+      LOCK_HELD=1
+      return 0
+    fi
+    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null)
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+      : # 持有者活着：等
+    elif [ -z "$(find "$ROOT/.lock" -prune -mmin -5 2>/dev/null)" ]; then
+      rm -rf "$ROOT/.lock" && continue # stale：偷锁后重试 mkdir
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge 60 ]; then
+      echo "sdkvm: another sdkvm operation holds $ROOT/.lock; retry in a moment" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+}
+lock_release() {
+  if [ "$LOCK_HELD" = 1 ]; then
+    rm -rf "$ROOT/.lock" 2>/dev/null || :
+    LOCK_HELD=0
+  fi
+}
+
+cleanup() {
+  rm -rf "$tmpdir" 2>/dev/null || :
+  lock_release
+}
+trap cleanup EXIT
+# 管道安装（curl | sh）时 SIGPIPE/HUP 常见：必须走 cleanup，否则锁会挂到 stale 才被偷
+trap 'cleanup; exit 1' HUP INT TERM
 
 fetch() {
   url=$1
@@ -100,9 +140,26 @@ if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
   exit 1
 fi
 
+lock_acquire
+
 mkdir -p "$ROOT/runtime" "$BIN_DIR"
+# runtime 先解压到 runtime.next 校验再挪进位：直接解压进 runtime/ 中途失败
+# 会留下残缺的 node 目录，shim 一运行就报 loader 错
+rm -rf "$ROOT/runtime.next"
+mkdir -p "$ROOT/runtime.next"
+if ! tar -xzf "$tmpdir/$node_archive" -C "$ROOT/runtime.next"; then
+  rm -rf "$ROOT/runtime.next"
+  echo "sdkvm: failed to extract the Node.js archive" >&2
+  exit 1
+fi
+if [ ! -x "$ROOT/runtime.next/$node_name/bin/node" ]; then
+  rm -rf "$ROOT/runtime.next"
+  echo "sdkvm: Node.js archive did not extract $node_name/bin/node" >&2
+  exit 1
+fi
 rm -rf "$ROOT/runtime/$node_name"
-tar -xzf "$tmpdir/$node_archive" -C "$ROOT/runtime"
+mv "$ROOT/runtime.next/$node_name" "$ROOT/runtime/$node_name"
+rm -rf "$ROOT/runtime.next"
 # current 若是真实目录（历史残留），ln -sfn 会把链接建到目录里面去，先拒绝
 if [ -d "$ROOT/runtime/current" ] && [ ! -L "$ROOT/runtime/current" ]; then
   echo "sdkvm: $ROOT/runtime/current is a real directory, not a symlink; remove it and retry" >&2
@@ -197,6 +254,7 @@ ensure_path_rc() {
   tmp=$(mktemp) || return 1
   if [ -f "$rc" ]; then
     awk -v b="$begin" -v e="$end" '
+      { sub(/\r$/, "") }
       $0 == b { skip=1; next }
       skip && $0 == e { skip=0; next }
       !skip { print }
@@ -205,6 +263,7 @@ ensure_path_rc() {
     : > "$tmp" || { rm -f "$tmp"; return 1; }
   fi
   # 先写 $rc.new 再 mv：mv 失败时原 rc 完好无损
+  # 行首去 \r 再比对：CRLF 的 rc 里标记行带 \r 不等于 b，旧块剥不掉会重复追加
   if [ -s "$tmp" ]; then
     { cat "$tmp"; printf '\n%s\n' "$block"; } > "$rc.new" || { rm -f "$tmp" "$rc.new"; return 1; }
   else

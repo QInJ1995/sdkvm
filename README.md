@@ -147,7 +147,7 @@ irm https://raw.githubusercontent.com/QInJ1995/sdkvm/main/install.ps1 | iex
 
 ```console
 $ sdkvm version
-1.0.6
+1.0.8
 ```
 
 自定义数据根目录时,**必须在安装命令的环境里显式携带 `SDKVM_HOME`**
@@ -495,7 +495,7 @@ sdkvm mrm --settings /tmp/settings.xml use aliyun
 
 ```console
 $ sdkvm version
-1.0.6
+1.0.8
 ```
 
 `sdkvm upgrade`(无参数):脚本安装时从 GitHub Release 下载新版本并原子替换
@@ -888,7 +888,9 @@ fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVE
 
 ### 代理
 
-当前不读取 `HTTPS_PROXY` 等代理变量,可使用系统级透明代理。
+CLI 下载(安装包、版本清单)会读取标准代理变量:`HTTPS_PROXY` / `HTTP_PROXY`
+(含小写)、`ALL_PROXY` 与 `NO_PROXY`。注意 `sdkvm node`/`nrm` 切换的是 **npm**
+的 registry,npm 自身的代理仍由 npm 配置管理。
 
 ### CI 或多用户隔离
 
@@ -943,7 +945,8 @@ npm run build
 
 `npm run build` 使用 tsup 生成 `dist/index.js`;本地试用执行 `node dist/index.js`。
 CI 在 macOS / Ubuntu / Windows 三平台运行类型检查、单元测试、构建打包与真实
-安装 / 切换 / 卸载的 e2e 验证。
+安装 / 切换 / 卸载的 e2e 验证;另有脚本安装 e2e(Ubuntu / Windows)用本地
+Release 服务走完 `install.sh` / `install.ps1` 全链路。
 
 ```
 src/

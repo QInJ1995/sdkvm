@@ -15,6 +15,7 @@ import {
   mrmTest,
   mrmUse,
   MRM_BEGIN,
+  MRM_END,
   readMrmUrl,
   resolveSettingsTarget,
 } from '../src/cli/mrm.js';
@@ -219,6 +220,55 @@ describe('mrm use', () => {
     fs.writeFileSync(settingsFile, broken);
     expect(() => mrmUse('aliyun')).toThrow(/unpaired/);
     expect(fs.readFileSync(settingsFile, 'utf8')).toBe(broken);
+  });
+
+  it('END 标记出现在 BEGIN 之前同样拒绝：strip 会吞掉 END 之后的用户配置', () => {
+    const inverted = [
+      '<settings>',
+      '  <mirrors>',
+      MRM_END,
+      MRM_BEGIN,
+      '  </mirrors>',
+      '</settings>',
+      '',
+    ].join('\n');
+    fs.writeFileSync(settingsFile, inverted);
+    expect(() => mrmUse('aliyun')).toThrow(/unpaired/);
+    expect(fs.readFileSync(settingsFile, 'utf8')).toBe(inverted);
+  });
+
+  it('CRLF 的 settings.xml 写回时整体保持 CRLF（不产生 \r\r\n 混行）', () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+    const crlf = USER_MIRROR.replace(/\n/g, '\r\n');
+    fs.writeFileSync(settingsFile, crlf, 'utf8');
+
+    mrmUse('aliyun');
+
+    const xml = fs.readFileSync(settingsFile, 'utf8');
+    expect(xml).toContain('<name>aliyun</name>');
+    // 新块与原有行都是 CRLF；不存在孤立的 LF（\r 之外）或双 \r
+    expect(xml).not.toMatch(/(?<!\r)\n/);
+    expect(xml).not.toContain('\r\r');
+  });
+});
+
+// Windows 普通权限创建符号链接需要开发者模式：仅 POSIX 上验证
+describe.skipIf(process.platform === 'win32')('mrm settings.xml 符号链接', () => {
+  it('写入穿透到链接目标，链接本身不被替换成普通文件', () => {
+    vi.spyOn(log, 'ok').mockImplementation(() => {});
+    vi.spyOn(log, 'info').mockImplementation(() => {});
+    const real = path.join(home, 'real-settings.xml');
+    fs.writeFileSync(real, USER_MIRROR);
+    fs.symlinkSync(real, settingsFile);
+
+    mrmUse('aliyun');
+
+    // chezmoi/stow 管理的链接必须还是链接
+    expect(fs.lstatSync(settingsFile).isSymbolicLink()).toBe(true);
+    const xml = fs.readFileSync(real, 'utf8');
+    expect(xml).toContain('<name>aliyun</name>');
+    expect(xml).toContain('<id>user</id>');
   });
 });
 

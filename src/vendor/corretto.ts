@@ -88,14 +88,24 @@ export const correttoVendor: Vendor = {
     // Corretto 无公开列表 API，且不只发 LTS（22/24/26 等中间版都在线）。
     // 与 Zulu 相同的思路：以 Adoptium 的发布节奏为 major 全集，逐个探测 latest 重定向，
     // 探测不到（该 major/平台没发）就隐藏该行。
-    const universe = await temurinVendor.listMajors();
+    let keys: { key: string; lts: boolean }[];
+    try {
+      // LTS 标记动态透传（Adoptium 数据）：静态表会随时间过期
+      keys = (await temurinVendor.listMajors()).map((u) => ({ key: u.key, lts: u.lts }));
+    } catch (err) {
+      // Adoptium 不可达不该拖垮 Corretto 自己的 ls -r（它只借道做 major 全集）
+      log.warn(
+        `could not fetch the Adoptium release-line index (${(err as Error).message}); listing LTS majors only`,
+      );
+      keys = [...LTS_MAJORS].sort((a, b) => a - b).map((key) => ({ key: String(key), lts: true }));
+    }
     const platform = detectPlatform();
     const failed: string[] = [];
     const results = await Promise.all(
-      universe.map(async ({ key }): Promise<ReleaseLine | null> => {
+      keys.map(async ({ key, lts }): Promise<ReleaseLine | null> => {
         try {
           const latest = await resolveLatestVersion(Number(key), platform);
-          return { key, lts: LTS_MAJORS.has(Number(key)), latestFullVersion: latest };
+          return { key, lts, latestFullVersion: latest };
         } catch {
           failed.push(key);
           return null;
@@ -103,7 +113,7 @@ export const correttoVendor: Vendor = {
       }),
     );
     if (failed.length > 0) {
-      if (failed.length === universe.length) {
+      if (failed.length === keys.length) {
         throw new SdkvmError(`Corretto listing failed for all majors (${failed.join(', ')})`);
       }
       log.warn(`Corretto listing failed for majors ${failed.join(', ')}; those lines are hidden`);
@@ -115,7 +125,15 @@ export const correttoVendor: Vendor = {
     let version: string;
     let majorSha: string | null = null;
     if (spec.kind === 'lts') {
-      const latestLts = Math.max(...LTS_MAJORS);
+      // LTS 集合动态取（Adoptium 数据），静态表会随时间过期；取不到再退回静态表
+      let latestLts: number;
+      try {
+        const universe = await temurinVendor.listMajors();
+        const ltsKeys = universe.filter((u) => u.lts).map((u) => Number(u.key));
+        latestLts = ltsKeys.length > 0 ? Math.max(...ltsKeys) : Math.max(...LTS_MAJORS);
+      } catch {
+        latestLts = Math.max(...LTS_MAJORS);
+      }
       version = await resolveLatestVersion(latestLts, platform);
       majorSha = await fetchLatestSha256(latestLts, platform);
     } else if (spec.kind === 'major') {

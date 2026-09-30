@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { detectPlatform } from '../core/platform.js';
 import { loadConfig } from '../core/config.js';
-import { withLock } from '../core/lock.js';
+import { withLock, isProcessAlive } from '../core/lock.js';
 import { listInstalled } from '../core/registry.js';
 import { ensureLayout, paths } from '../core/paths.js';
 import { envGet } from '../core/env.js';
@@ -10,6 +10,7 @@ import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { getVendor, resolveVendorId } from '../vendor/index.js';
 import { applyMirrorDetail, MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
+import { parseMirrorRootUrl } from './mirror-presets.js';
 import { downloadFile, cacheFileName } from '../net/download.js';
 import { HttpError } from '../net/http.js';
 import { hashFile, preflightChecksum, verifyChecksum } from '../net/checksum.js';
@@ -22,6 +23,10 @@ import { log } from '../ui/log.js';
 import { createProgress } from '../ui/progress.js';
 import type { SdkVersion } from '../core/version.js';
 import { cmdPath } from './cmdname.js';
+
+/** 变更阶段的锁等待预算：等另一个安装/卸载的换位收尾（秒级），
+ *  远好过下载几百 MB 后发现锁被占、整次下载作废 */
+const LOCK_WAIT_MS = 60_000;
 
 /**
  * 安装成功后提示的 `use` 参数。
@@ -67,10 +72,30 @@ function removeBackupQuietly(bak: string): void {
   }
 }
 
-/** 写 .incomplete 标记。内容记录"当时是否移走了旧目录"：恢复时据此区分
+/** 安装到达 finalDir 的方式，恢复语义不同：
+ *  installer（sh/exe 直接写 finalDir）中断后 finalDir 一律是半成品；
+ *  archive（tmp 解压后单次原子 rename 换位）换位完成后 finalDir 就是完好的新安装 */
+type InstallMode = 'installer' | 'archive';
+
+/** 写 .incomplete 标记。内容记录"当时是否移走了旧目录"与安装方式：恢复时据此区分
  *  finalDir 是半成品（新装）还是从未被动过的旧安装（换位前被中断）。 */
-function writeIncompleteMarker(incomplete: string, replacing: boolean): void {
-  fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing }));
+function writeIncompleteMarker(incomplete: string, replacing: boolean, mode: InstallMode): void {
+  fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing, mode }));
+}
+
+/** 安装成功后撤下标记。rm 失败（杀软锁文件等）时改写为 settled:true：
+ *  标记留在盘上会让 registry 继续隐藏完好的安装、下次恢复还会当半成品误删，
+ *  settled 语义 = "finalDir 已完好"，恢复路径据此只清标记不动目录 */
+function settleMarkerQuietly(incomplete: string, mode: InstallMode): void {
+  try {
+    fs.rmSync(incomplete, { force: true });
+  } catch (err) {
+    try {
+      fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing: true, mode, settled: true }));
+    } catch {
+      log.warn(`installed, but could not remove ${incomplete}: ${(err as Error).message}`);
+    }
+  }
 }
 
 /**
@@ -83,23 +108,48 @@ function recoverInterrupted(finalDir: string): void {
   if (!fs.existsSync(incomplete)) return;
   const bak = `${finalDir}.bak`;
   const name = path.basename(finalDir);
-  // 新格式标记带 replacing；纯时间戳的旧格式无法判断语义，按保守路径处理
+  // 新格式标记带 replacing/mode；纯时间戳的旧格式无法判断语义，按保守路径处理
   let replacing = false;
+  let mode: InstallMode | null = null;
+  let settled = false;
   let legacy = true;
   try {
-    const parsed = JSON.parse(fs.readFileSync(incomplete, 'utf8')) as { replacing?: unknown };
+    const parsed = JSON.parse(fs.readFileSync(incomplete, 'utf8')) as {
+      replacing?: unknown;
+      mode?: unknown;
+      settled?: unknown;
+    };
     if (parsed && typeof parsed === 'object' && typeof parsed.replacing === 'boolean') {
       replacing = parsed.replacing;
       legacy = false;
+      if (parsed.mode === 'installer' || parsed.mode === 'archive') mode = parsed.mode;
+      settled = parsed.settled === true;
     }
   } catch {
     // 保留 legacy 判定
   }
   try {
+    if (settled) {
+      // 上次安装其实成功了，只是标记删不掉：finalDir 完好，只清残留
+      try {
+        fs.rmSync(incomplete, { force: true });
+      } catch {
+        // 仍删不掉：保持 settled 标记，不再重复告警
+      }
+      removeBackupQuietly(bak);
+      return;
+    }
     if (fs.existsSync(bak)) {
-      fs.rmSync(finalDir, { recursive: true, force: true });
-      fs.renameSync(bak, finalDir);
-      log.warn(`recovered the previous ${name} after an interrupted install`);
+      if (mode === 'archive' && fs.existsSync(finalDir)) {
+        // 归档换位是一次原子 rename：finalDir 在即新装已完整落位，
+        // 中断只发生在收尾清理。保留新装、清掉 bak（installer 模式无此保证，仍回滚）
+        log.warn(`an earlier install of ${name} had completed; kept it and dropped the leftover backup`);
+        removeBackupQuietly(bak);
+      } else {
+        fs.rmSync(finalDir, { recursive: true, force: true });
+        fs.renameSync(bak, finalDir);
+        log.warn(`recovered the previous ${name} after an interrupted install`);
+      }
     } else if (fs.existsSync(finalDir) && (replacing || legacy)) {
       // 换位从未发生（或旧格式无法判断）：finalDir 是完好的旧版本，只清标记
       log.warn(`an earlier install of ${name} was interrupted before it made changes; kept the existing directory`);
@@ -188,6 +238,41 @@ export function sweepStaleParts(): void {
   }
 }
 
+/** tmp/ 残留（kill -9/断电留下的 extract-* 解压目录与安装期归档）清扫。
+ *  归档/解压都在锁外进行且文件名带 pid：优先按 pid 存活判断——活跃进程的文件绝不动
+ *  （大归档解压超过按龄阈值也不能误删），pid 已死则不论新旧立即清；
+ *  名字里解析不出 pid 的旧格式条目退回按龄（目录 mtime 只反映直接子项变动，阈值放宽一倍）。 */
+const TMP_STALE_MS = 2 * 60 * 60 * 1000;
+
+export function sweepStaleTmp(): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(paths.tmp());
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - TMP_STALE_MS;
+  for (const name of names) {
+    const p = path.join(paths.tmp(), name);
+    // 名字以 .pid / -pid 结尾（可选 .part）：归档下载 `${cacheFileName}.${pid}`、
+    // 解压目录 extract-<ts>-<pid>、历史 .tmp-<pid>.part 三种形式一并覆盖
+    const pidMatch = /(?:^|[.-])(\d+)(?:\.part)?$/.exec(name);
+    try {
+      if (pidMatch) {
+        const pid = Number(pidMatch[1]);
+        // 目录 mtime 只反映直接子项变动：正被写入深层文件的 extract 目录 mtime 可能很旧，
+        // 但其主人活着就绝不能碰
+        if (isProcessAlive(pid)) continue;
+        fs.rmSync(p, { recursive: true, force: true });
+        continue;
+      }
+      if (fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { recursive: true, force: true });
+    } catch {
+      // 恰好消失或被占用：跳过
+    }
+  }
+}
+
 export async function installCommand(
   type: SdkTypeId,
   specInput: string,
@@ -202,7 +287,17 @@ export async function installCommand(
 
   log.info(`resolving ${vendor.label} ${specInput} for ${platform.os}/${platform.arch} ...`);
   const resolved = await vendor.resolve(spec, platform);
-  const mirrorRoot = envGet('SDKVM_MIRROR') ?? config.mirror[vendorId] ?? null;
+  // SDKVM_MIRROR 环境变量与旧配置没有经过 mirror set 的校验：读时兜底校验/规范化，
+  // 带空格、query、fragment 的坏值不再被原样拼进下载 URL
+  const rawMirror = envGet('SDKVM_MIRROR') ?? config.mirror[vendorId] ?? null;
+  let mirrorRoot: string | null = null;
+  if (rawMirror) {
+    try {
+      mirrorRoot = parseMirrorRootUrl(rawMirror);
+    } catch (err) {
+      log.warn(`ignoring invalid mirror root "${rawMirror}": ${(err as Error).message}`);
+    }
+  }
   const { artifact, applied } = applyMirrorDetail(resolved, platform, mirrorRoot);
   if (applied && /^http:\/\//i.test(mirrorRoot ?? '')) {
     // 明文镜像只丢机密性（完整性仍由官方源哈希兜底），但用户应当知情
@@ -250,7 +345,26 @@ export async function installCommand(
     return;
   }
 
-  const dest = path.join(paths.cache(), cacheFileName(artifact.downloadUrl));
+  // 标记在 = 上次同版本安装被硬中断。先持锁恢复并复查：完好的旧安装就地返回，
+  // 不再白下载几百 MB（旧流程只有下载完进锁后才发现已装好）
+  if (fs.existsSync(`${finalDir}.incomplete`)) {
+    let recoveredInstalled = false;
+    await withLock(
+      async () => {
+        recoverInterruptedInstalls(type);
+        if (!opts.force && fs.existsSync(finalDir)) {
+          reportAlreadyInstalled();
+          recoveredInstalled = true;
+        }
+      },
+      { waitMs: LOCK_WAIT_MS },
+    );
+    if (recoveredInstalled) return;
+  }
+
+  // dest 放 tmp/ 并带 pid：并发装同版本时各写各的归档，先完成方的 finally 清理
+  // 不会删掉后来者正在校验/解压的文件（cache/ 按文件名共享时实测会撞）
+  const dest = path.join(paths.tmp(), `${cacheFileName(artifact.downloadUrl)}.${process.pid}`);
   const progress = createProgress(`↓ ${artifact.displayName}`);
   log.info(`downloading ${artifact.downloadUrl}`);
   let dl: Awaited<ReturnType<typeof downloadFile>>;
@@ -286,93 +400,105 @@ export async function installCommand(
     }
 
     // ---- 变更阶段：锁只覆盖安装目录的换位与安装器执行 ----
-    await withLock(async () => {
-      recoverInterruptedInstalls(type);
-      if (fs.existsSync(finalDir)) {
-        if (!opts.force) {
-          reportAlreadyInstalled();
-          return;
+    // 变更阶段紧跟长下载：他人持锁时有界等待（旧流程下载完才发现锁被占，
+    // 整次下载作废），等到或超时（LockBusyError）才放弃
+    await withLock(
+      async () => {
+        recoverInterruptedInstalls(type);
+        if (fs.existsSync(finalDir)) {
+          if (!opts.force) {
+            reportAlreadyInstalled();
+            return;
+          }
+          log.warn(`--force: removing existing ${artifact.dirName}`);
         }
-        log.warn(`--force: removing existing ${artifact.dirName}`);
-      }
-      sweepStaleParts();
+        sweepStaleParts();
+        sweepStaleTmp();
 
-      const bak = `${finalDir}.bak`;
-      const incomplete = `${finalDir}.incomplete`;
-      if (artifact.archive === 'sh' || artifact.archive === 'exe') {
-        // 安装器把 prefix 写进 shebang / conda-meta。先装到临时目录再改名会留下错误路径。
-        // 目录名旁的 .incomplete 标记用于识别被硬中断（kill -9/断电）的半成品：
-        // 安装器直接写 finalDir，没有 tmp+rename 的原子性
-        const existed = fs.existsSync(finalDir);
-        let moved = false;
-        try {
-          fs.rmSync(bak, { recursive: true, force: true });
-          writeIncompleteMarker(incomplete, existed);
-          if (existed) {
-            fs.renameSync(finalDir, bak);
-            moved = true;
-          }
-          log.info('running installer ...');
-          await runSilentInstaller(dest, artifact.archive, finalDir, platform.os);
-          const normalized = normalizeExtracted(finalDir, platform, type);
-          if (path.resolve(normalized.root) !== path.resolve(finalDir)) {
-            throw new SdkvmError(`Miniconda installer did not populate ${finalDir}`, {
-              hint: `expected the prefix itself, found ${normalized.root}`,
-            });
-          }
-          fs.rmSync(incomplete, { force: true });
-          removeBackupQuietly(bak);
-        } catch (err) {
-          if (moved || !existed) {
-            try {
-              fs.rmSync(finalDir, { recursive: true, force: true });
-            } catch {
-              // 删不掉半成品时保留 bak，把安装器的错误抛回去
+        const bak = `${finalDir}.bak`;
+        const incomplete = `${finalDir}.incomplete`;
+        if (artifact.archive === 'sh' || artifact.archive === 'exe') {
+          // 安装器把 prefix 写进 shebang / conda-meta。先装到临时目录再改名会留下错误路径。
+          // 目录名旁的 .incomplete 标记用于识别被硬中断（kill -9/断电）的半成品：
+          // 安装器直接写 finalDir，没有 tmp+rename 的原子性
+          const existed = fs.existsSync(finalDir);
+          let moved = false;
+          try {
+            fs.rmSync(bak, { recursive: true, force: true });
+            writeIncompleteMarker(incomplete, existed, 'installer');
+            if (existed) {
+              fs.renameSync(finalDir, bak);
+              moved = true;
             }
-          }
-          if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
-            try {
-              fs.renameSync(bak, finalDir);
-            } catch {
-              // 回滚失败时保留 bak
+            log.info('running installer ...');
+            await runSilentInstaller(dest, artifact.archive, finalDir, platform.os);
+            const normalized = normalizeExtracted(finalDir, platform, type);
+            if (path.resolve(normalized.root) !== path.resolve(finalDir)) {
+              throw new SdkvmError(`Miniconda installer did not populate ${finalDir}`, {
+                hint: `expected the prefix itself, found ${normalized.root}`,
+              });
             }
+            // 成功路径的标记删除也可能失败（杀软）：绝不能让一次成功安装报错
+            settleMarkerQuietly(incomplete, 'installer');
+            removeBackupQuietly(bak);
+          } catch (err) {
+            if (moved || !existed) {
+              try {
+                fs.rmSync(finalDir, { recursive: true, force: true });
+              } catch {
+                // 删不掉半成品时保留 bak，把安装器的错误抛回去
+              }
+            }
+            if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
+              try {
+                fs.renameSync(bak, finalDir);
+              } catch {
+                // 回滚失败时保留 bak
+              }
+            }
+            settleIncompleteMarker(finalDir, incomplete, bak, existed, moved);
+            throw err;
           }
-          settleIncompleteMarker(finalDir, incomplete, bak, existed, moved);
-          throw err;
+        } else if (preparedRoot !== null) {
+          const existed = fs.existsSync(finalDir);
+          let moved = false;
+          try {
+            fs.rmSync(bak, { recursive: true, force: true });
+            if (existed) {
+              // 标记先于换位写入：finalDir 被改名移走后，只有它能证明 bak 的归属
+              writeIncompleteMarker(incomplete, true, 'archive');
+              fs.renameSync(finalDir, bak);
+              moved = true;
+            }
+            await renameWithRetry(preparedRoot, finalDir);
+            settleMarkerQuietly(incomplete, 'archive');
+            removeBackupQuietly(bak);
+          } catch (err) {
+            if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
+              try {
+                fs.renameSync(bak, finalDir);
+              } catch {
+                // 回滚失败时保留 bak
+              }
+            }
+            settleIncompleteMarker(finalDir, incomplete, bak, existed, moved);
+            throw err;
+          }
         }
-      } else if (preparedRoot !== null) {
-        const existed = fs.existsSync(finalDir);
-        let moved = false;
-        try {
-          fs.rmSync(bak, { recursive: true, force: true });
-          if (existed) {
-            // 标记先于换位写入：finalDir 被改名移走后，只有它能证明 bak 的归属
-            writeIncompleteMarker(incomplete, true);
-            fs.renameSync(finalDir, bak);
-            moved = true;
-          }
-          await renameWithRetry(preparedRoot, finalDir);
-          fs.rmSync(incomplete, { force: true });
-          removeBackupQuietly(bak);
-        } catch (err) {
-          if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
-            try {
-              fs.renameSync(bak, finalDir);
-            } catch {
-              // 回滚失败时保留 bak
-            }
-          }
-          settleIncompleteMarker(finalDir, incomplete, bak, existed, moved);
-          throw err;
-        }
-      }
 
-      log.ok(`installed ${artifact.displayName} → ${finalDir}`);
-      log.info(`switch to it: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
-    });
+        log.ok(`installed ${artifact.displayName} → ${finalDir}`);
+        log.info(`switch to it: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
+      },
+      { waitMs: LOCK_WAIT_MS },
+    );
   } finally {
-    // 校验或安装任一环节失败都清掉已下载归档，不让未通过校验的包留在 cache/
-    fs.rmSync(dest, { force: true });
+    // 校验或安装任一环节失败都清掉已下载归档；清不掉（杀软短暂锁文件）只警告，
+    // 不把已成功的安装报成失败。残留由 tmp/ 的按 pid/龄清扫兜底
+    try {
+      fs.rmSync(dest, { force: true });
+    } catch (err) {
+      log.warn(`could not remove the downloaded archive ${dest}: ${(err as Error).message}`);
+    }
     // 只清自己的 tmp：解压在锁外进行，tmp/ 下可能还有别的进程在用的兄弟目录
     if (!installerMode) {
       try {

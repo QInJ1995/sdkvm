@@ -576,7 +576,9 @@ export function minicondaMatchesFull(installed: SdkVersion, specVersion: string)
     installed.major === want.major &&
     installed.minor === want.minor &&
     (installed.patch ?? 0) === (want.patch ?? 0) &&
-    (!matchBuild || installed.build === want.build) &&
+    // 构建号是纯数字串：数值比较，"26.7.1-9" 也命中 "-09" 的输入（目录名不补零、
+    // 输入可以带零，严格字符串比较会把同一个构建判成两个）
+    (!matchBuild || Number(installed.build ?? 0) === Number(want.build ?? 0)) &&
     (!matchPython || installed.extra === want.extra)
   );
 }

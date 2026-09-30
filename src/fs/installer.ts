@@ -56,22 +56,36 @@ export async function runSilentInstaller(
   await runInherit(cmd, args);
 }
 
-/** 安装器输出直接打到终端，避免把约 1 GB 解压日志塞进 maxBuffer。 */
+/** 安装器输出直接打到终端，避免把约 1 GB 解压日志塞进 maxBuffer。
+ *  安装器卡死（等待 stdin、杀软挂起）没有超时会一直持锁——分钟级大安装器给足 20 分钟。 */
+const INSTALLER_TIMEOUT_MS = 20 * 60 * 1000;
+
 function runInherit(cmd: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timedOut = false;
     const fail = (message: string) => {
       if (settled) return;
       settled = true;
       reject(new SdkvmError(message, { hint: `args: ${args.join(' ')}` }));
     };
     const child = spawn(cmd, args, { stdio: 'inherit', windowsHide: true });
-    child.on('error', (err) => fail(`Failed to run ${cmd}: ${err.message}`));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, INSTALLER_TIMEOUT_MS);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      fail(`Failed to run ${cmd}: ${err.message}`);
+    });
     child.on('close', (code) => {
+      clearTimeout(timer);
       if (settled) return;
       settled = true;
       if (code === 0) resolve();
-      else fail(`Failed to run ${cmd}: exit ${code ?? 'unknown'}`);
+      else if (timedOut) {
+        fail(`Installer ${cmd} timed out after ${Math.round(INSTALLER_TIMEOUT_MS / 60000)} min`);
+      } else fail(`Failed to run ${cmd}: exit ${code ?? 'unknown'}`);
     });
   });
 }

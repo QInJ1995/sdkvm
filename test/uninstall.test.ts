@@ -72,6 +72,24 @@ describe.skipIf(process.platform === 'win32')('uninstall 当前版本', () => {
     expect(currentSdk('java')?.dirPath).toBe(other);
     expect(fs.readFileSync(rc, 'utf8')).toContain(rcBegin('java'));
   });
+
+  it('同版本的 .bak / .incomplete 残留一并清掉，不会被恢复逻辑"复活"', async () => {
+    // 回归：旧版 uninstall 只删 finalDir，留在旁边的 bak 会被下次
+    // recoverInterruptedInstalls 换回 finalDir，卸载的版本又"复活"
+    const dir = path.join(home, 'jdks', 'temurin-21.0.5+11');
+    const javaHome = path.join(dir, 'Contents', 'Home');
+    fs.mkdirSync(javaHome, { recursive: true });
+    const bak = `${dir}.bak`;
+    fs.mkdirSync(path.join(bak, 'Contents', 'Home'), { recursive: true });
+    const marker = `${dir}.incomplete`;
+    fs.writeFileSync(marker, JSON.stringify({ startedAt: 1, replacing: true, mode: 'archive' }));
+
+    await uninstallCommand('java', '21', {});
+
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(fs.existsSync(bak)).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
 });
 
 describe('current 链接位置被真实目录占用', () => {

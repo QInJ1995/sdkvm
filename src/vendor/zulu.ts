@@ -169,16 +169,26 @@ export const zuluVendor: Vendor = {
 
   async listMajors(): Promise<ReleaseLine[]> {
     // 用 Adoptium 的 OpenJDK 发布节奏作为 major 全集，逐个探测 Zulu 是否有构建
-    const universe = await temurinVendor.listMajors();
+    let keys: { key: string; lts: boolean }[];
+    try {
+      // LTS 标记动态透传（Adoptium 数据）：静态表会随时间过期
+      keys = (await temurinVendor.listMajors()).map((u) => ({ key: u.key, lts: u.lts }));
+    } catch (err) {
+      // Adoptium 不可达不该让 Zulu 的 ls -r/lts 整体失败：退回静态 LTS 集
+      log.warn(
+        `could not fetch the Adoptium release-line index (${(err as Error).message}); listing LTS majors only`,
+      );
+      keys = [...LTS_MAJORS].sort((a, b) => a - b).map((key) => ({ key: String(key), lts: true }));
+    }
     const platform = detectPlatform();
     const failed: string[] = [];
     const results = await Promise.all(
-      universe.map(async ({ key }): Promise<ReleaseLine | null> => {
+      keys.map(async ({ key, lts }): Promise<ReleaseLine | null> => {
         try {
           const packages = await queryPackages(key, platform);
           const pick = pickPlainJdk(packages, platform);
           if (!pick) return null;
-          return { key, lts: LTS_MAJORS.has(Number(key)), latestFullVersion: pick.java_version.join('.') };
+          return { key, lts, latestFullVersion: pick.java_version.join('.') };
         } catch {
           // 静默吞掉会让 ls -r 无声缺行、lts 解析偏错：收集起来统一提示
           failed.push(key);
@@ -187,7 +197,7 @@ export const zuluVendor: Vendor = {
       }),
     );
     if (failed.length > 0) {
-      if (failed.length === universe.length) {
+      if (failed.length === keys.length) {
         throw new SdkvmError(`Zulu listing failed for all majors (${failed.join(', ')})`);
       }
       log.warn(`Zulu listing failed for majors ${failed.join(', ')}; those lines are hidden`);

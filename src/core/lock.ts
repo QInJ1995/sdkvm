@@ -22,7 +22,8 @@ function readLockPid(): number | null {
   }
 }
 
-function isProcessAlive(pid: number): boolean {
+/** pid 存活探测（tmp 残留清扫也用它区分"活跃进程的文件"与"死进程的遗留"） */
+export function isProcessAlive(pid: number): boolean {
   if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -117,11 +118,13 @@ function stealLock(lockDir: string): boolean {
 }
 
 /**
- * 清理历史偷锁残留的 `.lock.stale-<pid>` 目录（偷到后 rm 失败、或进程死在
- * rename 与 rm 之间）。只在持有锁时调用；staging 主人还活着就跳过——它正要自己删。
+ * 清理历史偷锁/释放残留的 `.lock.stale-<pid>`、`.lock.rel-<pid>` 目录（rm 失败、
+ * 或进程死在 rename 与 rm 之间）。只在持有锁时调用；staging 主人还活着就跳过——
+ * 它正要自己删。
  */
 function sweepStaleStaging(lockDir: string): void {
   const root = paths.root();
+  const base = path.basename(lockDir);
   let names: string[];
   try {
     names = fs.readdirSync(root);
@@ -129,8 +132,9 @@ function sweepStaleStaging(lockDir: string): void {
     return;
   }
   for (const name of names) {
-    if (!name.startsWith(`${path.basename(lockDir)}.stale-`)) continue;
-    const pid = Number(name.slice(name.lastIndexOf('.stale-') + '.stale-'.length));
+    const at = name.lastIndexOf('.stale-') !== -1 ? name.lastIndexOf('.stale-') : name.lastIndexOf('.rel-');
+    if (at === -1 || !name.startsWith(base) || !/^\.(stale|rel)-\d+$/.test(name.slice(at))) continue;
+    const pid = Number(name.slice(at).split('-')[1]);
     if (Number.isInteger(pid) && isProcessAlive(pid)) continue;
     try {
       fs.rmSync(path.join(root, name), { recursive: true, force: true });
@@ -140,8 +144,16 @@ function sweepStaleStaging(lockDir: string): void {
   }
 }
 
+/** 本进程持有的锁深度：updateConfig 等嵌套调用不再自锁死（原先第二层 acquire 会抛
+ *  "Another sdkvm operation is in progress"并提示自己删锁） */
+let heldDepth = 0;
+
 /** mkdir 原子锁：防止并发 install/uninstall 写冲突 */
 export function acquireLock(): void {
+  if (heldDepth > 0) {
+    heldDepth += 1;
+    return;
+  }
   const lockDir = paths.lock();
   fs.mkdirSync(paths.root(), { recursive: true });
   // 竞态重试（持有者恰好退出、锁被别的等待者抢先偷走）有界进行：
@@ -152,6 +164,7 @@ export function acquireLock(): void {
       fs.mkdirSync(lockDir);
       writeLockInfo(Date.now());
       sweepStaleStaging(lockDir);
+      heldDepth = 1;
       return;
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
@@ -166,10 +179,7 @@ export function acquireLock(): void {
         }
       }
       if (!stale) {
-        throw new SdkvmError('Another sdkvm operation is in progress', {
-          // SDKVM_HOME 自定义时锁不在 ~/.sdkvm，必须给实际路径
-          hint: `If this is wrong, remove ${lockDir} manually.`,
-        });
+        throw new LockBusyError(lockDir);
       }
       if (stealLock(lockDir)) continue; // 偷到了，下一轮 mkdir 应当成功
       transient += 1;
@@ -182,15 +192,77 @@ export function acquireLock(): void {
   }
 }
 
-export function releaseLock(): void {
-  // 锁可能已按 stale 被别人偷走：只有 info.json 仍归属自己时才删除
-  if (readLockPid() === process.pid) {
-    fs.rmSync(paths.lock(), { recursive: true, force: true });
+/** 他人持锁：唯一可等待重试的锁错误（4xx 类），其余（损坏、权限）立即抛 */
+export class LockBusyError extends SdkvmError {
+  constructor(readonly lockDir: string) {
+    super('Another sdkvm operation is in progress', {
+      // SDKVM_HOME 自定义时锁不在 ~/.sdkvm，必须给实际路径
+      hint: `If this is wrong, remove ${lockDir} manually.`,
+    });
+    this.name = 'LockBusyError';
   }
 }
 
-export async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-  acquireLock();
+export function releaseLock(): void {
+  if (heldDepth > 1) {
+    heldDepth -= 1;
+    return;
+  }
+  heldDepth = 0;
+  const lockDir = paths.lock();
+  const staging = `${lockDir}.rel-${process.pid}`;
+  // 先 rename 占有再校验再删：直接 check-then-rm 的话，读到自己的 pid 后、rm 之前
+  // 锁被别人偷走并转手，rm 会删掉新持有者的锁。rename 只有唯一赢家
+  try {
+    fs.renameSync(lockDir, staging);
+  } catch {
+    return; // 锁已不在（被偷走/已释放）：无事可做
+  }
+  const owner = readRelPid(staging);
+  if (owner !== process.pid) {
+    // 抢到的不是自己的锁（偷锁竞态窗口）：原样还回去
+    try {
+      fs.renameSync(staging, lockDir);
+    } catch {
+      // 还不回去（对方已重建锁目录）：staging 由 sweepStaleStaging 兜底清理
+    }
+    return;
+  }
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // 残留由 sweepStaleStaging 按 .rel- 前缀兜底清理
+  }
+}
+
+/** 从 .lock.rel-<pid> 暂存目录里读持有者 pid（info.json 缺失/损坏返回 null） */
+function readRelPid(staging: string): number | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(`${staging}/info.json`, 'utf8')) as { pid?: unknown };
+    return typeof raw.pid === 'number' ? raw.pid : null;
+  } catch {
+    return null;
+  }
+}
+
+const WAIT_POLL_MS = 200;
+
+/**
+ * 持锁执行。他人持锁时默认立即抛 LockBusyError；给 waitMs 则有界等待
+ * （安装的变更阶段在长下载之后，等几秒远好过把整次下载作废）。
+ * 等待期间锁过期会被持有者的下一次尝试顺路偷掉，不会干等到底。
+ */
+export async function withLock<T>(fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+  const deadline = Date.now() + (opts.waitMs ?? 0);
+  for (;;) {
+    try {
+      acquireLock();
+      break;
+    } catch (err) {
+      if (!(err instanceof LockBusyError) || Date.now() >= deadline) throw err;
+      await new Promise((r) => setTimeout(r, WAIT_POLL_MS));
+    }
+  }
   const timer = setInterval(() => touchLock(), HEARTBEAT_MS);
   // 不让 timer 拖住进程退出
   timer.unref?.();

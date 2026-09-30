@@ -105,10 +105,13 @@ export async function removeEnvWin(name: string): Promise<void> {
 }
 
 /** 只读某用户级环境变量的原始注册表值：不存在或查询失败返回 null（不抛）。
- *  DoNotExpand 保留 %VAR% 引用原样——调用方判断的是"注册表里有没有/是什么"，不是展开结果。 */
+ *  DoNotExpand 保留 %VAR% 引用原样——调用方判断的是"注册表里有没有/是什么"，不是展开结果。
+ *  输出编码先切 UTF-8：控制台默认 OEM 代码页会把非 ASCII 值（中文用户名路径等）
+ *  输出成乱码，execFile 按 UTF-8 解码后就是替换字符 */
 export async function getEnvWin(name: string): Promise<string | null> {
   const escaped = name.replace(/'/g, "''");
   const ps = [
+    '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
     "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
     "if(-not $k){ exit 0 }",
     "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",

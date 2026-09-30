@@ -47,7 +47,10 @@ function Get-Url([string]$url, [string]$out) {
       Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out
       return
     } catch {
-      if ($i -eq 3) { throw }
+      $code = 0
+      try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+      # 404 是确定性失败：重试三次只是白等，还会把"发布还没就绪"拖成三倍时长
+      if ($code -eq 404 -or $i -eq 3) { throw }
       Start-Sleep -Seconds (2 * $i)
     }
   }
@@ -131,6 +134,9 @@ try {
   }
   if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
   if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
+  # 上次升级留下的应用脚本（升级成功后本应自删）：不清掉会一直躺在根目录
+  $applyScript = Join-Path $Root 'upgrade-apply.cmd'
+  if (Test-Path $applyScript) { Remove-Item -Force $applyScript }
 
   # shim 运行时用 %~dp0 推导根路径，不内嵌安装路径：非 ASCII 用户名不会被 ascii 编码损坏
   @"
@@ -146,10 +152,12 @@ if defined SDKVM_HOME (
   Write-Host "sdkvm: installed to $BinDir\sdkvm.cmd"
   Write-Host "sdkvm: runtime $current (isolated from sdkvm node use)"
 
-  # 写入用户 PATH（幂等）；优先用 %USERPROFILE%\.sdkvm\bin 形式
-  $home = [Environment]::GetFolderPath('UserProfile')
-  if ($BinDir.StartsWith($home, [StringComparison]::OrdinalIgnoreCase)) {
-    $pathEntry = '%USERPROFILE%' + $BinDir.Substring($home.Length)
+  # 写入用户 PATH（幂等）；优先用 %USERPROFILE%\.sdkvm\bin 形式。
+  # 注意变量名不能叫 $home：PowerShell 的 $HOME 是只读自动变量（大小写不敏感），
+  # 对它赋值会直接抛错——旧版就死在这一行，PATH 从未写入
+  $userHome = [Environment]::GetFolderPath('UserProfile')
+  if ($BinDir.StartsWith($userHome, [StringComparison]::OrdinalIgnoreCase)) {
+    $pathEntry = '%USERPROFILE%' + $BinDir.Substring($userHome.Length)
   } else {
     $pathEntry = $BinDir
   }

@@ -2,7 +2,7 @@ import { parseSha256SumLine } from '../net/checksum.js';
 import { httpJson, httpText } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { cmdPath } from '../cli/cmdname.js';
-import { detectPlatform } from '../core/platform.js';
+import { detectPlatform, hostLibc } from '../core/platform.js';
 import {
   comparePythonVersions,
   formatPythonVersion,
@@ -255,9 +255,14 @@ export const cpythonVendor: Vendor = {
         if (fromTag) return fromTag;
       }
       if (existsElsewhere) {
+        // musl 主机：不是"没这个版本"，是本基线只收 glibc 构建——把真实原因说出来
+        const muslNote =
+          platform.os === 'linux' && hostLibc(platform.arch) === 'musl'
+            ? ' musl builds do exist upstream but are outside this baseline; on Alpine use the distro python package.'
+            : '';
         throw new SdkvmError(
           `No Python ${formatPythonVersion(existsElsewhere)} archive for ${platform.os}/${platform.arch}`,
-          { hint: `Run \`${cmdPath('python')} ls -r\` and pick a release that ships this platform.` },
+          { hint: `Run \`${cmdPath('python')} ls -r\` and pick a release that ships this platform.${muslNote}` },
         );
       }
       throw new SdkvmError(`No Python release matches "${specLabel(spec)}"`, {

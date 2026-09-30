@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installUseHint, refinedUseHint } from '../src/cli/install.js';
-import { findInstalled, listInstalled } from '../src/core/registry.js';
+import { currentSdk, findInstalled, listInstalled } from '../src/core/registry.js';
+import { setCurrent } from '../src/fs/link.js';
+import { detectPlatform } from '../src/core/platform.js';
 import {
   parseFlutterVersion,
   parseMavenVersion,
@@ -222,5 +224,30 @@ describe('refinedUseHint', () => {
 
   it('非 java/node 类型原样返回', () => {
     expect(refinedUseHint('maven', parseMavenVersion('maven', '3.9.9'), '3.9')).toBe('3.9');
+  });
+});
+
+// 链接目标与 readdir 拼写不一致（macOS 的 /tmp → /private/tmp、/var → /private/var）
+// 时，currentSdk 仍必须命中已装目录：否则 uninstall 会误判"非当前版本"而漏清 rc
+describe.skipIf(process.platform === 'win32')('currentSdk 路径拼写归一', () => {
+  it('链接目标用 realpath 拼写、安装目录用符号链接拼写时仍匹配', () => {
+    const dirName = 'temurin-21.0.5+11';
+    const javaHome = path.join(home, 'jdks', dirName, 'Contents', 'Home');
+    fs.mkdirSync(javaHome, { recursive: true });
+    // 模拟两次会话用不同拼写：use 时 SDKVM_HOME 是 realpath 形态，
+    // 后续 readdir 拼出的目录是 mkdtemp 的原始形态
+    const realHome = fs.realpathSync(home);
+    expect(realHome === home || realHome.endsWith(path.basename(home))).toBe(true);
+    setCurrent('java', path.join(realHome, 'jdks', dirName, 'Contents', 'Home'), detectPlatform());
+
+    const current = currentSdk('java');
+    // 命中即关键：uninstall 据此判定"当前版本"并清理 rc/链接
+    expect(current?.dirPath).toBe(path.join(home, 'jdks', dirName));
+  });
+
+  it('悬空链接（目标已删）不当成匹配，返回 null', () => {
+    fs.mkdirSync(path.join(home, 'jdks', 'temurin-21.0.5+11'), { recursive: true });
+    fs.symlinkSync('/nonexistent/sdkvm/jdk', path.join(home, 'current-java'));
+    expect(currentSdk('java')).toBeNull();
   });
 });

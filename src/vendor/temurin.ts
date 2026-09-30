@@ -43,7 +43,10 @@ async function resolveLatestAsset(
     throw err;
   }
   if (!Array.isArray(data) || data.length === 0) {
-    throw new SdkvmError(`Adoptium API returned no asset for JDK ${major}`);
+    // 200 + [] 与 404 同义（mac/aarch64 的 JDK 8 就是这样：Temurin 没发过该组合）
+    throw new SdkvmError(`No Temurin JDK ${major} build for ${os}/${arch}`, {
+      hint: 'This platform is not published for that major. Try another vendor, for example: sdkvm java install 8 --vendor zulu',
+    });
   }
   const pkg = (data[0] as LatestAsset)?.binary?.package;
   const link = typeof pkg?.link === 'string' ? pkg.link : '';

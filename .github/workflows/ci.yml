@@ -25,17 +25,18 @@ jobs:
       - name: pack smoke
         run: npm pack --dry-run
 
-  # macOS 已在本机手工验证；CI 覆盖 ubuntu + windows 的真实安装/切换链路
+  # 三平台的真实安装/切换链路。macOS 与 Linux 同走 symlink + rc 分支，
+  # 仍分开跑：bundle 展开、tar、rc 探测在各平台的差异只有真机才暴露
   e2e:
     name: e2e (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       SDKVM_QUIET: '1'
-      SHELL: /bin/bash   # Linux runner 的 $SHELL 可能为空，固定为 bash 使 rc 探测确定
+      SHELL: /bin/bash   # Linux/macOS runner 的 $SHELL 可能为空，固定为 bash 使 rc 探测确定
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -71,8 +72,8 @@ jobs:
           $userPath=[string]$k.GetValue('Path','',$fmt)
           if ($userPath -notlike '*%JAVA_HOME%\bin*') { throw "user PATH missing %JAVA_HOME%\bin: $userPath" }
 
-      - name: symlink + rc (linux)
-        if: runner.os == 'Linux'
+      - name: symlink + rc (unix)
+        if: runner.os != 'Windows'
         run: |
           test -x "$HOME/.sdkvm/current-java/bin/java"
           "$HOME/.sdkvm/current-java/bin/java" -version
@@ -90,8 +91,8 @@ jobs:
       - name: use node 22
         run: node dist/index.js node use 22
 
-      - name: node current + rc (linux)
-        if: runner.os == 'Linux'
+      - name: node current + rc (unix)
+        if: runner.os != 'Windows'
         run: |
           test -x "$HOME/.sdkvm/current-node/bin/node"
           "$HOME/.sdkvm/current-node/bin/node" --version
@@ -136,8 +137,8 @@ jobs:
       - name: use go 1.24
         run: node dist/index.js go use 1.24
 
-      - name: go current + binary (linux)
-        if: runner.os == 'Linux'
+      - name: go current + binary (unix)
+        if: runner.os != 'Windows'
         run: |
           test -x "$HOME/.sdkvm/current-go/bin/go"
           "$HOME/.sdkvm/current-go/bin/go" version
@@ -178,3 +179,82 @@ jobs:
         run: |
           node dist/index.js node mirror set nodejs https://mirror.nju.edu.cn/nodejs-release
           node dist/index.js node mirror show
+
+  # install.sh / install.ps1 的真实链路：本地起一个静态服务器冒充 GitHub Release
+  # （npm pack 产物 + SHA256SUMS），Node 运行时仍从官方源下载。
+  # 覆盖点：校验和、runtime 原子落位、shim 生成、PATH 写入（含 install.ps1 的
+  # $HOME 只读变量回归——那次 bug 让 Windows PATH 从未写成功过）
+  script-install:
+    name: script install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      SHELL: /bin/bash   # 与 e2e job 同理：固定 bash 使 install.sh 的 rc 探测确定
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm pack
+      - name: stage local release
+        shell: bash
+        run: |
+          # 与 release.yml 的 checksums 步骤完全同款：两行哈希（版本名 + sdkvm.tgz）
+          tgz=$(ls sdkvm-*.tgz)
+          cp "$tgz" sdkvm.tgz
+          sha256sum "$tgz" sdkvm.tgz > SHA256SUMS
+          mkdir -p srv/releases/latest/download
+          cp sdkvm.tgz SHA256SUMS srv/releases/latest/download/
+      - name: serve release (unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd srv
+          nohup python3 -m http.server 8099 >/dev/null 2>&1 &
+          sleep 1
+          curl -fsS http://127.0.0.1:8099/releases/latest/download/SHA256SUMS -o /dev/null
+      - name: serve release (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process -FilePath python -ArgumentList '-m','http.server','8099','--directory','srv' -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8099/releases/latest/download/SHA256SUMS -OutFile NUL
+
+      - name: run install.sh
+        if: runner.os != 'Windows'
+        env:
+          SDKVM_RELEASE_BASE: http://127.0.0.1:8099/releases
+          SDKVM_HOME: ${{ github.workspace }}/.sdkvm-script
+        run: sh install.sh
+      - name: install.sh result (unix)
+        if: runner.os != 'Windows'
+        run: |
+          test -x .sdkvm-script/bin/sdkvm
+          .sdkvm-script/bin/sdkvm --version
+          grep -q 'sdkvm path' "$HOME/.bashrc"
+
+      - name: run install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SDKVM_RELEASE_BASE: http://127.0.0.1:8099/releases
+          SDKVM_HOME: ${{ github.workspace }}\.sdkvm-script
+        run: ./install.ps1
+      - name: install.ps1 result (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SDKVM_HOME: ${{ github.workspace }}\.sdkvm-script
+        run: |
+          & "$env:SDKVM_HOME\bin\sdkvm.cmd" --version
+          if (-not (Test-Path "$env:SDKVM_HOME\runtime\current\node.exe")) { throw 'runtime node missing' }
+          # PATH 写入回归：SDKVM_HOME 在 USERPROFILE 之外时写绝对路径（历史上
+          # $HOME 只读变量的 bug 让这一步从未成功执行过）
+          $k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+          $userPath=[string]$k.GetValue('Path','',$fmt)
+          if ($userPath -notlike "*$env:SDKVM_HOME\bin*") { throw "user PATH missing bin: $userPath" }

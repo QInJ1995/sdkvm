@@ -29,6 +29,10 @@ export async function uninstallCommand(
     // currentSdk 会把"当前版本"误判成"不是当前"，跳过链接与 rc 清理
     const wasCurrent = currentSdk(type)?.dirPath === installed.dirPath;
     fs.rmSync(installed.dirPath, { recursive: true, force: true });
+    // 兄弟残留一并清掉：只删目录名本身的话，旁边的 .bak 会被 install 的恢复扫描
+    // 当成"孤儿备份"换回 finalDir——刚卸载的版本又复活了
+    fs.rmSync(`${installed.dirPath}.bak`, { recursive: true, force: true });
+    fs.rmSync(`${installed.dirPath}.incomplete`, { force: true });
     if (!wasCurrent) {
       log.ok(`removed ${installed.version.vendor}-${spec.formatVersion(installed.version)}`);
       return;

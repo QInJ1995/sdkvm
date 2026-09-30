@@ -1,3 +1,7 @@
+import { EnvHttpProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from 'undici';
+// 用 undici 自己的 RequestInit/Response 类型：@types/node 的全局版本来自另一个
+// undici-types 拷贝，两者结构不完全兼容（本文件所有请求都走 undiciFetch，类型须同源）
+import type { RequestInit, Response } from 'undici';
 import { SdkvmError } from '../util/errors.js';
 import { getVersion } from '../cli/misc.js';
 
@@ -8,6 +12,23 @@ const CONNECT_TIMEOUT_MS = 30_000;
 /** 元数据响应体（JSON/文本）的读取预算：到点取消连接并按网络错误重试 */
 const BODY_TIMEOUT_MS = 60_000;
 const RETRIES = 3;
+/** 429 重试上限：尊重 Retry-After，但不让服务端把我们挂住太久 */
+const MAX_RATE_LIMIT_WAIT_MS = 30_000;
+
+// 显式代理环境（HTTPS_PROXY/HTTP_PROXY/ALL_PROXY）此前被全局 fetch 静默忽略——
+// 企业网内表现为所有请求直连超时。检测到任一变量就装 EnvHttpProxyAgent（尊重 NO_PROXY）。
+// 注意 npm 版 undici 的 setGlobalDispatcher 只作用于它自己的 fetch：这里连 fetch
+// 一起从 undici 导入，两者配套。初始化失败（坏变量值）退回直连
+const hasProxyEnv = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'].some(
+  (k) => process.env[k] && process.env[k]!.trim() !== '',
+);
+if (hasProxyEnv) {
+  try {
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  } catch {
+    // 代理变量存在但初始化失败：直连尝试，失败信息足够定位
+  }
+}
 
 export class HttpError extends SdkvmError {
   constructor(message: string, readonly status: number, readonly url: string) {
@@ -52,11 +73,19 @@ function withReadBudget<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
+  const go = (signal: AbortSignal | null | undefined): Promise<Response> => {
+    const merged = { ...init, signal, headers: { 'user-agent': UA, ...init.headers } };
+    // 代理激活时必须走 undici 实例自己的 fetch（其 setGlobalDispatcher 只作用于该实例）；
+    // 其余场景走全局 fetch——行为与旧版一致，测试也仍可 stub 全局 fetch
+    return hasProxyEnv
+      ? undiciFetch(url, merged)
+      : (globalThis.fetch(url, merged as unknown as Parameters<typeof globalThis.fetch>[1]) as unknown as Promise<Response>);
+  };
   // 调用方自带 signal（downloadFile 的空闲超时）原样透传；否则只给"到响应头为止"的
   // 预算：fetch 返回即停表。AbortSignal.timeout 会跟着请求走到底，慢速大响应体
   // 会在 30s 处被整体掐断（元数据 API 常见），body 阶段交给 withReadBudget。
   if (init.signal) {
-    return fetch(url, { ...init, signal: init.signal, headers: { 'user-agent': UA, ...init.headers } });
+    return go(init.signal);
   }
   const ac = new AbortController();
   const timer = setTimeout(
@@ -64,7 +93,7 @@ async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
     CONNECT_TIMEOUT_MS,
   );
   try {
-    return await fetch(url, { ...init, signal: ac.signal, headers: { 'user-agent': UA, ...init.headers } });
+    return await go(ac.signal);
   } finally {
     clearTimeout(timer);
   }
@@ -100,10 +129,21 @@ export async function httpFetch(url: string, init: RequestInit = {}): Promise<Re
       }
       // 降级检查对任意最终状态生效：降级到 http 后的 404/5xx 同样不能放过
       await assertNoDowngrade(url, res);
-      if (res.status >= 500 && attempt < RETRIES) {
+      // 429 与 5xx 同为可重试；429 尊重 Retry-After（秒数形式），封顶 30s
+      if ((res.status === 429 || res.status >= 500) && attempt < RETRIES) {
+        const status = res.status;
+        const retryAfter = Number(res.headers.get('retry-after'));
         await releaseBody(res);
-        lastErr = new HttpError(`Server error ${res.status}`, res.status, url);
-        await sleep(500 * 2 ** (attempt - 1));
+        lastErr = new HttpError(
+          status === 429 ? `Rate limited (HTTP 429)` : `Server error ${status}`,
+          status,
+          url,
+        );
+        const waitMs =
+          status === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter * 1000, MAX_RATE_LIMIT_WAIT_MS)
+            : 500 * 2 ** (attempt - 1);
+        await sleep(waitMs);
         continue;
       }
       if (!res.ok) {

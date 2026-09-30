@@ -32,13 +32,39 @@ export function setCurrent(type: SdkTypeId, target: string, platform: Platform):
     });
   }
   if (platform.os === 'windows') {
-    // junction 要求绝对路径；无法 rename 覆盖，只能重建（窗口期极短）
+    // junction 要求绝对路径；无法 rename 覆盖，只能重建。先把旧链接挪到一边再建新的：
+    // 直接 rm+symlink 时，symlink 失败（路径策略/杀软）会连旧链接一起丢，
+    // 挪开后新链接失败可把旧的换回来
+    const aside = `${link}.old-${process.pid}`;
+    fs.rmSync(aside, { recursive: true, force: true });
+    let hadOld = false;
     try {
-      fs.rmSync(link, { force: true });
+      fs.renameSync(link, aside);
+      hadOld = true;
     } catch {
-      fs.rmSync(link, { recursive: true, force: true });
+      // 不存在（首次 use）
     }
-    fs.symlinkSync(target, link, 'junction');
+    try {
+      fs.symlinkSync(target, link, 'junction');
+    } catch (err) {
+      if (hadOld) {
+        try {
+          fs.renameSync(aside, link);
+        } catch {
+          // 还原也失败：aside 留在原地，下面的错误信息带上它
+        }
+      }
+      throw new SdkvmError(`Failed to point the current link at ${target}: ${(err as Error).message}`, {
+        hint: hadOld && fs.existsSync(aside)
+          ? `The previous link was kept at ${aside}; rename it back to ${link} by hand if needed.`
+          : `Create the junction manually if this keeps failing.`,
+      });
+    }
+    try {
+      fs.rmSync(aside, { recursive: true, force: true });
+    } catch {
+      // 旧链接删不掉（杀软短暂占用）：留着无害，下次 use 会以新 pid 重建 aside 名
+    }
     return;
   }
   const tmp = `${link}.tmp-${process.pid}`;

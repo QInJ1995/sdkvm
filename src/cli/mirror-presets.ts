@@ -116,7 +116,9 @@ export function normalizeMirrorUrl(url: string): string {
   }
 }
 
-/** 校验并规范化用户输入的镜像根（写入 config） */
+/** 校验并规范化用户输入的镜像根（写入 config）。返回解析后的 href：
+ *  空白/大小写差异不再原样进库，query 与 fragment 直接拒绝——
+ *  vendor 拼路径时它们只会造出取不到文件的 URL。 */
 export function parseMirrorRootUrl(url: string): string {
   const trimmed = url.trim();
   let parsed: URL;
@@ -131,7 +133,11 @@ export function parseMirrorRootUrl(url: string): string {
   if (parsed.username || parsed.password) {
     throw new Error('mirror URL cannot include a username or password');
   }
-  return trimmed.replace(/\/+$/, '');
+  if (parsed.search || parsed.hash) {
+    throw new Error('mirror URL cannot include a query string or fragment');
+  }
+  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  return parsed.href.replace(/\/+$/, '');
 }
 
 export function mirrorableVendors(type: SdkTypeId): readonly MirrorVendorId[] {

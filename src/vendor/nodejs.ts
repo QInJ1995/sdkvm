@@ -1,5 +1,6 @@
 import { parseSha256SumLine } from '../net/checksum.js';
 import { httpJson, httpText } from '../net/http.js';
+import { hostLibc } from '../core/platform.js';
 import { SdkvmError } from '../util/errors.js';
 import { compareVersions, formatNodeVersion, parseNodeVersion } from '../core/version.js';
 import type { SdkVersion } from '../core/version.js';
@@ -73,6 +74,13 @@ export const nodejsVendor: Vendor = {
   },
 
   async resolve(spec: VersionSpec, platform: VendorPlatform): Promise<ResolvedArtifact> {
+    // nodejs.org 的官方归档全是 glibc 构建：musl 主机（Alpine 等）装上也是一跑就段错误，
+    // 在解析阶段就给能读懂的错误
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Node.js releases from nodejs.org are glibc builds; musl Linux (Alpine) is not supported', {
+        hint: 'Use the distro nodejs package (apk add nodejs), or unofficial musl builds from https://unofficial-builds.nodejs.org (not covered by this mirror/checksum path)',
+      });
+    }
     const entries = await fetchIndex();
     let entry: NodeIndexEntry | undefined;
     if (spec.kind === 'latest') {

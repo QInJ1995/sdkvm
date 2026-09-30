@@ -9,16 +9,24 @@ const execFileAsync = promisify(execFile);
 export async function run(
   cmd: string,
   args: string[],
-  opts: { cwd?: string } = {},
+  opts: { cwd?: string; timeoutMs?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   try {
     return await execFileAsync(cmd, args, {
       cwd: opts.cwd,
       windowsHide: true,
       maxBuffer: 32 * 1024 * 1024,
+      timeout: opts.timeoutMs,
+      killSignal: 'SIGKILL',
     });
   } catch (err) {
-    const e = err as { stderr?: string; message?: string; code?: unknown };
+    const e = err as { stderr?: string; message?: string; code?: unknown; killed?: boolean };
+    // 超时被 kill 的进程没有 stderr，只有含糊的 spawn ETIMEDOUT/终止消息
+    if (e.killed && opts.timeoutMs) {
+      throw new SdkvmError(`Failed to run ${cmd}: timed out after ${Math.round(opts.timeoutMs / 1000)}s`, {
+        hint: `args: ${args.join(' ')}`,
+      });
+    }
     const detail = (e.stderr || e.message || '').split('\n')[0];
     throw new SdkvmError(`Failed to run ${cmd}: ${detail}`, {
       hint: `args: ${args.join(' ')}`,

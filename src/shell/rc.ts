@@ -68,7 +68,13 @@ export function rcBlockFish(type: SdkTypeId): string {
   return [
     rcBegin(type),
     `set -gx ${spec.envVar} '${toPosix(abs).replace(/'/g, "'\\''")}'`,
-    `fish_add_path -p $${spec.envVar}${binSuffix}`,
+    // fish_add_path 是 3.2+ 才有：更老的 fish 里静默失败，PATH 不生效也不报错。
+    // 退回 contains + set -gx（全部版本可用，幂等）
+    'if type -q fish_add_path',
+    `  fish_add_path -p $${spec.envVar}${binSuffix}`,
+    `else if not contains $${spec.envVar}${binSuffix} $PATH`,
+    `  set -gx PATH $${spec.envVar}${binSuffix} $PATH`,
+    'end',
     ...extra,
     rcEnd(type),
   ].join('\n');
@@ -135,6 +141,13 @@ export function upsertRcContent(content: string, type: SdkTypeId): string {
 
 /** 原子写 rc：tmp+rename，避免 O_TRUNC 直接写在写一半崩溃时截断用户文件 */
 function writeRcAtomic(file: string, content: string): void {
+  // rc 常被 chezmoi/stow 等做成符号链接：rename 会把链接替换成普通文件，
+  // 脱离用户的 dotfile 管理。写透到链接目标（读侧 readFileSync 本来就跟随链接）
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) file = fs.realpathSync(file);
+  } catch {
+    // 不存在或目标读不出：按原路径写
+  }
   const tmp = `${file}.sdkvm-tmp-${process.pid}`;
   let mode: number | undefined;
   try {

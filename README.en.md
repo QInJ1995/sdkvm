@@ -167,7 +167,7 @@ Open a new terminal afterwards (or `source` the rc file) and verify:
 
 ```console
 $ sdkvm version
-1.0.6
+1.0.8
 ```
 
 For a custom data root, **pass `SDKVM_HOME` on the install command itself**
@@ -545,7 +545,7 @@ Behavior notes:
 
 ```console
 $ sdkvm version
-1.0.6
+1.0.8
 ```
 
 `sdkvm upgrade` (no arguments): for a script install it downloads the new
@@ -986,8 +986,10 @@ repositories (`settings.xml`).
 
 ### Proxies
 
-`HTTPS_PROXY` and related variables are not read; a transparent system proxy
-works.
+CLI downloads (SDK archives, version manifests) honor the standard proxy
+variables: `HTTPS_PROXY` / `HTTP_PROXY` (either case), `ALL_PROXY`, and
+`NO_PROXY`. Note that `sdkvm node` / `nrm` switch the **npm** registry;
+npm's own proxy is still managed by npm config.
 
 ### Isolating data for CI or multiple users
 
@@ -1045,7 +1047,9 @@ npm run build
 
 `npm run build` runs tsup and writes `dist/index.js`; try the CLI locally with
 `node dist/index.js`. CI runs type checks, unit tests, build and pack, plus a
-real install / switch / uninstall e2e flow on macOS, Ubuntu, and Windows.
+real install / switch / uninstall e2e flow on macOS, Ubuntu, and Windows, and a
+script-install e2e (Ubuntu / Windows) that exercises `install.sh` /
+`install.ps1` against a locally served release.
 
 ```
 src/

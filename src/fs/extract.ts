@@ -6,6 +6,10 @@ import type { Platform } from '../core/platform.js';
 
 const WIN_TAR = 'C:\\Windows\\System32\\tar.exe';
 
+/** 解压预算：外部 tar/unzip/powershell 卡死（杀软扫描挂起、坏归档死循环）时，
+ *  没有超时会让进程永远挂住；2GB Flutter 解压正常也就几十秒，10 分钟足够宽 */
+const EXTRACT_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** Windows 无 tar.exe 时的 PowerShell 回退：Expand-Archive（PS5.1）不拒绝
  *  `..`/绝对路径条目，先逐条目枚举校验再解压。校验与解压同一进程完成。 */
 function expandArchiveChecked(archiveFile: string, destDir: string): Promise<{ stdout: string; stderr: string }> {
@@ -28,7 +32,9 @@ function expandArchiveChecked(archiveFile: string, destDir: string): Promise<{ s
     '} finally { $zip.Dispose() }',
     `Expand-Archive -LiteralPath ${psQuote(archiveFile)} -DestinationPath ${psQuote(destDir)} -Force`,
   ].join('\n');
-  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+  return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    timeoutMs: EXTRACT_TIMEOUT_MS,
+  });
 }
 
 /** 解压 tar.gz / tar.xz / zip 到全新空目录（降低路径穿越面） */
@@ -43,7 +49,7 @@ export async function extractArchive(
   if (platform.os === 'windows') {
     // Win10 1803+ 自带 bsdtar（支持 zip 与 tar），失败回退 Expand-Archive
     if (fs.existsSync(WIN_TAR)) {
-      await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir]);
+      await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
       return;
     }
     if (archiveType !== 'zip') {
@@ -58,11 +64,11 @@ export async function extractArchive(
 
   if (archiveType === 'zip' && platform.rawPlatform === 'linux') {
     // Linux GNU tar 不支持 zip（正常情况下 Linux 无 zip 归档，防御性回退）
-    await run('unzip', ['-q', '-o', archiveFile, '-d', destDir]);
+    await run('unzip', ['-q', '-o', archiveFile, '-d', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
     return;
   }
   // macOS bsdtar / Linux GNU tar 均可 -xf 自动识别压缩格式
-  await run('tar', ['-xf', archiveFile, '-C', destDir]);
+  await run('tar', ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
 }
 
 export function tmpExtractDir(base: string): string {

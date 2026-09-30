@@ -17,6 +17,16 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - name: tag matches package version
+        run: |
+          # tag 与 package.json 不一致时直接失败：发布出去的 sdkvm.tgz 会带错误版本号，
+          # 且 upgrade 的 same-version 短路会让用户永远升不上去
+          v="${GITHUB_REF_NAME#v}"
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$v" != "$pkg" ]; then
+            echo "::error title=version-mismatch::tag $GITHUB_REF_NAME -> $v but package.json is $pkg" >&2
+            exit 1
+          fi
       - run: npm test
       - run: npm pack
       - name: checksums

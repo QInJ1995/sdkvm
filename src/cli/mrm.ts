@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { httpFetch } from '../net/http.js';
 import { loadConfig, updateConfig } from '../core/config.js';
 import { acquireLock, releaseLock } from '../core/lock.js';
 import { envGet } from '../core/env.js';
@@ -138,9 +139,14 @@ function countMarkerLines(content: string, marker: string): number {
 }
 
 function assertMarkers(content: string): void {
+  const lines = content.split('\n');
+  const firstBegin = lines.findIndex((l) => l.trim() === MRM_BEGIN);
+  const firstEnd = lines.findIndex((l) => l.trim() === MRM_END);
   const begin = countMarkerLines(content, MRM_BEGIN);
   const end = countMarkerLines(content, MRM_END);
-  if (begin !== end || begin > 1) {
+  // END 在 BEGIN 之前也算不配对：stripBlock 从 BEGIN 删到文件尾，会把 END 之后的
+  // 用户配置整段吞掉，settings.xml 变成非法 XML 还退出码 0
+  if (begin !== end || begin > 1 || (begin === 1 && firstBegin > firstEnd)) {
     throw new SdkvmError('settings.xml has an unpaired sdkvm mrm marker', {
       hint: 'Remove the leftover <!-- >>> sdkvm mrm >>> --> comments by hand, then retry.',
     });
@@ -297,17 +303,22 @@ function minimalSettings(block: string): string {
  * 已有 `<mirrors>` 时插到第一个子节点；没有则在 `</settings>` 前补一整段。
  */
 export function applyMrmBlock(content: string, mirror: { name: string; url: string } | null): string {
-  if (!content.trim()) {
+  // 行尾统一按 LF 处理（原有行的 \r 会残留成 \r\r\n），原文件的 CRLF 风格由
+  // writeSettings 在写回时整体恢复
+  const text = content.replace(/\r\n/g, '\n');
+  if (!text.trim()) {
     return mirror ? minimalSettings(renderBlock(mirror.name, mirror.url)) : '';
   }
-  assertMarkers(content);
-  if (!findTag(content, 'settings', true)) {
+  assertMarkers(text);
+  if (!findTag(text, 'settings', true)) {
     throw new SdkvmError('settings.xml has no </settings>', {
-      hint: 'Fix the file, or point sdkvm mrm at another settings.xml.',
+      hint:
+        'Fix the file, or point sdkvm mrm at another settings.xml. ' +
+        '(A namespace-prefixed root like <mvn:settings> is valid for Maven but not understood here — remove the prefix or manage that file by hand.)',
     });
   }
-  const hadBlock = countMarkerLines(content, MRM_BEGIN) > 0;
-  const stripped = stripBlock(content);
+  const hadBlock = countMarkerLines(text, MRM_BEGIN) > 0;
+  const stripped = stripBlock(text);
   if (!mirror) return hadBlock ? ensureTrailingNewline(stripped) : content;
   return ensureTrailingNewline(insertBlock(stripped, renderBlock(mirror.name, mirror.url)));
 }
@@ -345,9 +356,17 @@ function readFileIfExists(file: string): string {
 }
 
 function writeSettings(file: string, content: string): void {
+  // settings.xml 常被 chezmoi/stow 等做成符号链接：tmp+rename 会把链接本身换成普通
+  // 文件，脱离用户的 dotfile 管理。写透到链接目标（读侧本来就跟随符号链接）
+  try {
+    if (fs.lstatSync(file).isSymbolicLink()) file = fs.realpathSync(file);
+  } catch {
+    // 不存在或目标读不出：按原路径写
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   // 非 UTF-8 的 settings.xml（GBK 注释等）：utf8 解码再写回会把原始字节换成替换字符，
   // 且不可逆。写回前先备份原文件（与 rc 文件同款保护）
+  let hadCrlf = false;
   if (fs.existsSync(file)) {
     const raw = fs.readFileSync(file);
     if (!Buffer.from(raw.toString('utf8'), 'utf8').equals(raw)) {
@@ -355,9 +374,14 @@ function writeSettings(file: string, content: string): void {
       fs.copyFileSync(file, bak);
       log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
     }
+    hadCrlf = raw.toString('utf8').includes('\r\n');
   }
+  // 原文件是 CRLF 就整体按 CRLF 写回：applyMrmBlock 内部按 LF 处理，
+  // 不恢复的话整个文件的行尾风格会漂移（git diff 全文件变化）
+  const withNewline = ensureTrailingNewline(content);
+  const out = hadCrlf && !withNewline.includes('\r\n') ? withNewline.replace(/(?<!\r)\n/g, '\r\n') : withNewline;
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, ensureTrailingNewline(content));
+  fs.writeFileSync(tmp, out);
   try {
     fs.renameSync(tmp, file);
   } catch (err) {
@@ -508,19 +532,29 @@ export function mrmDel(name: string, opts: { settings?: string } = {}): void {
     deleted = existing;
   });
   // 删的恰是 settings.xml 里"当前生效"的镜像时，sdkvm 块会悬空指向已删地址：
-  // 移除标记块回到官方源（等价 use official）
+  // 移除标记块回到官方源（等价 use official）。
+  // "是否生效"的判定必须在锁内复核：锁外先读再进锁的话，中间并发的 mrm use
+  // 换了镜像，我们会把别人刚写的新块误删
   const target = resolveSettingsTarget(opts.settings);
-  const active = activeMirror(target.file);
-  if (deletedUrl && normalizeRegistryUrl(active.url) === normalizeRegistryUrl(deletedUrl)) {
+  if (deletedUrl) {
     acquireLock();
+    let removedBlock = false;
     try {
       const existing = readFileIfExists(target.file);
-      const next = applyMrmBlock(existing, null);
-      if (next !== existing) writeSettings(target.file, next);
+      const activeUrl = readMrmUrl(existing);
+      if (activeUrl && normalizeRegistryUrl(activeUrl) === normalizeRegistryUrl(deletedUrl)) {
+        const next = applyMrmBlock(existing, null);
+        if (next !== existing) {
+          writeSettings(target.file, next);
+          removedBlock = true;
+        }
+      }
     } finally {
       releaseLock();
     }
-    log.warn(`"${deleted}" was the active mirror; removed the sdkvm block (back to official)`);
+    if (removedBlock) {
+      log.warn(`"${deleted}" was the active mirror; removed the sdkvm block (back to official)`);
+    }
   }
   log.ok(`deleted Maven registry ${deleted}`);
 }
@@ -531,12 +565,14 @@ export async function defaultMavenRepoProbe(url: string): Promise<number> {
   const target = new URL(url);
   target.pathname = target.pathname.replace(/\/+$/, '') + '/' + PROBE_POM;
   const started = Date.now();
-  const res = await fetch(target, {
+  // 走 httpFetch：与下载同一代理通道（HTTPS_PROXY）与重试策略
+  const res = await httpFetch(target.href, {
     method: 'GET',
     redirect: 'follow',
     signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  await res.body?.cancel()?.catch(() => undefined);
   return Date.now() - started;
 }
 
