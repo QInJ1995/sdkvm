@@ -9,6 +9,8 @@ export interface DownloadResult {
   file: string;
   sha256: string;
   bytes: number;
+  /** 服务端声明的 content-length（压缩传输或缺失时为 null） */
+  total: number | null;
 }
 
 /** 流式下载到 .part（边下边算 sha256），完成后原子 rename。
@@ -68,10 +70,21 @@ function waitForDrain(out: fs.WriteStream, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** 底层 open(2)/close 卡死（NFS/SMB/FIFO）时 'close' 永远不来。
+ *  有界等待后强制 destroy 放行，让清理路径（rm .part）能继续。 */
+const CLOSE_TIMEOUT_MS = 15_000;
+
 async function closeWriteStream(out: fs.WriteStream): Promise<void> {
   if (out.closed) return;
   await new Promise<void>((resolve) => {
-    out.once('close', () => resolve());
+    const timer = setTimeout(() => {
+      out.destroy();
+      resolve();
+    }, CLOSE_TIMEOUT_MS);
+    out.once('close', () => {
+      clearTimeout(timer);
+      resolve();
+    });
     if (!out.destroyed) out.destroy();
   });
 }
@@ -81,7 +94,9 @@ export async function downloadFile(
   destFile: string,
   onProgress?: (bytes: number, total: number | null) => void,
 ): Promise<DownloadResult> {
-  const partFile = `${destFile}.part`;
+  // .part 带进程号：下载在锁外进行，同 URL 并发下载各写各的临时文件，
+  // 完成时各自原子 rename 到 dest（同 URL 内容相同，先后覆盖无害）
+  const partFile = `${destFile}.tmp-${process.pid}.part`;
   const hash = crypto.createHash('sha256');
   const out = fs.createWriteStream(partFile);
   const stream = watchWriteStream(out);
@@ -114,7 +129,11 @@ export async function downloadFile(
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       timer.refresh();
       throwIfStreamError();
-      if (!out.write(chunk)) await waitForDrain(out, ac.signal);
+      if (!out.write(chunk)) {
+        await waitForDrain(out, ac.signal);
+        // 背压等待期间收不到 chunk，计时器会空转误报"无数据"——drain 回来即刷新
+        timer.refresh();
+      }
       throwIfStreamError();
       hash.update(chunk);
       bytes += chunk.byteLength;
@@ -122,12 +141,25 @@ export async function downloadFile(
     }
     throwIfStreamError();
     await new Promise<void>((resolve, reject) => {
-      out.end((err?: Error | null) => (err ? reject(err) : resolve()));
+      // end 回调同样可能因底层句柄卡死而不来（closeWriteStream 同理），有界等待
+      const flushTimer = setTimeout(
+        () => reject(new SdkvmError('Timed out flushing the download to disk', { hint: url })),
+        CLOSE_TIMEOUT_MS,
+      );
+      out.end((err?: Error | null) => {
+        clearTimeout(flushTimer);
+        if (err) reject(err);
+        else resolve();
+      });
     });
   } catch (err) {
     // destroy 会让还在飞的 write 回调发出 ERR_STREAM_DESTROYED；上面的 error 监听负责接住
     await closeWriteStream(out);
-    fs.rmSync(partFile, { force: true });
+    try {
+      fs.rmSync(partFile, { force: true });
+    } catch {
+      // Windows 上句柄仍被卡死的流占用时删不掉：留给安装时的按龄清扫
+    }
     if (stalled) {
       throw new SdkvmError(`Download stalled: no data for ${IDLE_TIMEOUT_MS / 1000}s (${bytes} bytes so far)`, {
         hint: url,
@@ -150,7 +182,7 @@ export async function downloadFile(
   }
   // 与安装目录落位一致：Windows 上杀毒可能短暂锁住刚写完的 .part
   await renameWithRetry(partFile, destFile);
-  return { file: destFile, sha256: hash.digest('hex'), bytes };
+  return { file: destFile, sha256: hash.digest('hex'), bytes, total };
 }
 
 export function cacheFileName(url: string): string {

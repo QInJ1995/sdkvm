@@ -82,7 +82,10 @@ export async function removeFromUserPathWin(entry: string): Promise<void> {
     "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
     "if($null -eq $k.GetValue('Path', $null)){ exit 0 }",
     "$raw=[string]$k.GetValue('Path','',$fmt)",
-    `$parts=@($raw -split ';' | Where-Object { $_ -ne '' -and $_ -ne '${escaped}' })`,
+    "$parts=@($raw -split ';' | Where-Object { $_ -ne '' })",
+    // 不含 entry 时直接退出：重写同样的值再广播 WM_SETTINGCHANGE 没有意义
+    `if($parts -notcontains '${escaped}'){ exit 0 }`,
+    `$parts=@($parts | Where-Object { $_ -ne '${escaped}' })`,
     "$k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     ...broadcastPs(),
   ].join('\n');
@@ -99,6 +102,27 @@ export async function removeEnvWin(name: string): Promise<void> {
     ...broadcastPs(),
   ].join('\n');
   await run('powershell.exe', encoded(ps));
+}
+
+/** 只读某用户级环境变量的原始注册表值：不存在或查询失败返回 null（不抛）。
+ *  DoNotExpand 保留 %VAR% 引用原样——调用方判断的是"注册表里有没有/是什么"，不是展开结果。 */
+export async function getEnvWin(name: string): Promise<string | null> {
+  const escaped = name.replace(/'/g, "''");
+  const ps = [
+    "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')",
+    "if(-not $k){ exit 0 }",
+    "$fmt=[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames",
+    `$v=$k.GetValue('${escaped}', $null, $fmt)`,
+    "if($null -eq $v){ exit 0 }",
+    "[Console]::Out.Write([string]$v)",
+  ].join('\n');
+  try {
+    const { stdout } = await run('powershell.exe', encoded(ps));
+    const value = stdout.trim();
+    return value === '' ? null : value;
+  } catch {
+    return null;
+  }
 }
 
 /** 某类型要写入用户 PATH 的全部项。多数 SDK 只有一段；Miniconda 在 Windows 有多段。 */

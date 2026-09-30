@@ -42,6 +42,7 @@ export const MIRRORABLE_BY_TYPE: Record<SdkTypeId, readonly MirrorVendorId[]> = 
 /**
  * 内置镜像站。只收录与 applyMirror 路径约定兼容、且站方/文档可对上的根 URL。
  * tuna 不含 nodejs：TUNA nodejs-release 归档不全。
+ * tuna 不含 flutter：TUNA 的 /flutter 目录已下线（404），flutter 镜像用 nju。
  * nju / tuna 不含 maven：它们的 Apache 发行目录不是 Maven Central 路径。
  * miniconda 只收录安装器目录（Miniconda3-*.sh / .exe），不是 pkgs/ 频道。
  * aliyun 的 /anaconda/miniconda 返回 404，不收录。
@@ -65,7 +66,6 @@ export const MIRROR_SITE_PRESETS: readonly MirrorSite[] = [
     list: true,
     vendors: {
       temurin: 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium',
-      flutter: 'https://mirrors.tuna.tsinghua.edu.cn/flutter/flutter_infra_release',
       miniconda: 'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda',
     },
   },

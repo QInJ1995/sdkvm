@@ -4,6 +4,7 @@ import type { SdkVersion } from './version.js';
 import { paths } from './paths.js';
 import { SdkvmError } from '../util/errors.js';
 import { readCurrent } from '../fs/link.js';
+import { loadConfig } from './config.js';
 import { getSdkType } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { cmdPath } from '../cli/cmdname.js';
@@ -69,7 +70,9 @@ export function currentSdk(type: SdkTypeId): InstalledSdk | null {
 export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: string): InstalledSdk {
   const spec = getSdkType(type);
   const { vendor: specVendor, spec: parsed } = spec.parseUserSpec(specInput);
-  const vendor = vendorArg ?? specVendor;
+  // --vendor 与输入前缀同源；前者没经过 toLowerCase（parseUserSpec 内部有），
+  // 大小写不一（--vendor Corretto）会静默过滤成空集
+  const vendor = (vendorArg ?? specVendor)?.toLowerCase();
   const all = listInstalled(type);
   const candidates = vendor ? all.filter((j) => j.version.vendor === vendor) : all;
 
@@ -98,9 +101,11 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
       const f = spec.formatVersion(j.version);
       // 反向前缀：wanted 带 build 而已装目录不带（zulu 的 build 在 distro_version，不进目录名）
       if (f === v || f.startsWith(`${v}+`) || f.startsWith(`${v}.`) || v.startsWith(`${f}+`)) return true;
-      // formatVersion 会把 X.0.0 折叠成 X：目录显示 "21" 时输入 "21.0"/"21.0.0" 也应命中
+      // formatVersion 会把 X.0.0 折叠成 X：目录显示 "21" 时输入 "21.0"/"21.0.0" 也应命中。
+      // 输入带 build 时上面四条已判定（命中或不同构建）——norm 会把 build 一并抹掉，
+      // 不能让 "21.0.5+11" 的请求被匹配到 21.0.5+9 的安装上
       const norm = (s: string) => (s.split('+')[0] ?? s).replace(/(\.0)+$/, '');
-      return norm(f) === norm(v);
+      return !v.includes('+') && norm(f) === norm(v);
     });
   }
 
@@ -115,5 +120,15 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
         `Install one first: ${cmdPath(type)} install ${want}`,
     });
   }
-  return matched[matched.length - 1] as InstalledSdk;
+  // 同一版本号跨 vendor 并存（temurin-21.0.5 与 corretto-21.0.5）时优先默认 vendor，
+  // 否则选谁取决于 localeCompare 的字母序，与 defaultVendor 配置脱节
+  let pick = matched[matched.length - 1] as InstalledSdk;
+  if (matched.length > 1 && vendor == null) {
+    const tied = matched.filter((m) => spec.compareVersions(m.version, pick.version) === 0);
+    if (tied.length > 1) {
+      const preferred = tied.find((m) => m.version.vendor === loadConfig().defaultVendor);
+      if (preferred) pick = preferred;
+    }
+  }
+  return pick;
 }

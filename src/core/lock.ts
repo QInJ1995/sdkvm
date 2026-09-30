@@ -167,7 +167,8 @@ export function acquireLock(): void {
       }
       if (!stale) {
         throw new SdkvmError('Another sdkvm operation is in progress', {
-          hint: 'If this is wrong, remove ~/.sdkvm/.lock manually.',
+          // SDKVM_HOME 自定义时锁不在 ~/.sdkvm，必须给实际路径
+          hint: `If this is wrong, remove ${lockDir} manually.`,
         });
       }
       if (stealLock(lockDir)) continue; // 偷到了，下一轮 mkdir 应当成功

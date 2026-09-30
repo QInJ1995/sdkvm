@@ -102,14 +102,20 @@ function pickPlainJdk(
 const ZULU_PAGE_SIZE = 1000;
 const ZULU_MAX_PAGES = 20;
 
-function nextZuluPage(header: string | null): number | null {
+/** x-pagination 头解析下一页。Azul 实际返回的是 total_pages/last_page（从不返回 next_page），
+ *  只认 next_page 会永远停在第一页，较旧的精确版本会被漏掉；两种字段都认。 */
+function nextZuluPage(header: string | null, page: number): number | null {
   if (!header) return null;
   try {
-    const parsed = JSON.parse(header) as { next_page?: unknown };
-    return typeof parsed.next_page === 'number' && parsed.next_page > 0 ? parsed.next_page : null;
+    const parsed = JSON.parse(header) as { total_pages?: unknown; next_page?: unknown };
+    if (typeof parsed.next_page === 'number' && parsed.next_page > 0) return parsed.next_page;
+    if (typeof parsed.total_pages === 'number' && parsed.total_pages > 0) {
+      return page < parsed.total_pages ? page + 1 : null;
+    }
   } catch {
     return null;
   }
+  return null;
 }
 
 async function queryPackages(
@@ -128,7 +134,7 @@ async function queryPackages(
     const res = await httpFetch(url, { headers: { accept: 'application/json' } });
     const data = (await res.json()) as unknown;
     if (Array.isArray(data)) out.push(...(data as ZuluPackage[]));
-    const next = nextZuluPage(res.headers.get('x-pagination'));
+    const next = nextZuluPage(res.headers.get('x-pagination'), page);
     if (next == null || next === page) break;
     page = next;
   }

@@ -88,44 +88,71 @@ function isMarkerLine(line: string, marker: string): boolean {
 
 function stripBlockBetween(content: string, begin: string, end: string): string {
   const lines = content.split('\n');
-  // 完整块：begin 行到 end 行（含）整段移除；嵌套的重复 begin 属于块内容，随块删除
-  const kept: string[] = [];
-  let skipping = false;
-  for (const line of lines) {
-    if (!skipping && isMarkerLine(line, begin)) {
-      skipping = true;
+  const isAnySdkvmMarker = (l: string) => /^# (?:>>>|<<<) sdkvm /.test(l.trimStart());
+  const out: string[] = [];
+  let fixedUnterminated = false;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    if (!isMarkerLine(line, begin)) {
+      out.push(line);
+      i += 1;
       continue;
     }
-    if (skipping && isMarkerLine(line, end)) {
-      skipping = false;
+    // 完整块：begin 行到 end 行（含）整段移除；块内再出现的 begin 属于块内容，随块删除
+    let j = i + 1;
+    while (j < lines.length && !isMarkerLine(lines[j]!, end)) j += 1;
+    if (j < lines.length) {
+      i = j + 1;
       continue;
     }
-    if (!skipping) kept.push(line);
+    // 半损坏块（end 标记被删/改）：删除到下一个 sdkvm 块标记行为止；
+    // 其后没有其它标记时无法区分"块内容"与用户自己的配置，仅移除标记行本身，
+    // 绝不删到文件尾
+    let k = i + 1;
+    while (k < lines.length && !isAnySdkvmMarker(lines[k]!)) k += 1;
+    i = k < lines.length ? k : i + 1;
+    fixedUnterminated = true;
   }
-  // 半损坏块（end 标记被删/改）：完整块已被上面清掉，剩下的 begin 必属损坏块。
-  // 只删到下一个 sdkvm 块标记为止；其后没有其它标记时无法区分"块内容"与
-  // 用户自己的配置，仅移除标记行本身并警告，绝不删到文件尾。
-  const beginIdx = kept.findIndex((l) => isMarkerLine(l, begin));
-  if (beginIdx >= 0) {
-    const nextMarker = kept.findIndex(
-      (l, i) => i > beginIdx && /^# (?:>>>|<<<) sdkvm /.test(l.trimStart()),
+  if (fixedUnterminated) {
+    log.warn(
+      `found an unterminated ${CLI_BIN} init marker in the rc file; removed the dangling marker (and its orphaned lines) — check the file manually`,
     );
-    if (nextMarker > beginIdx) {
-      kept.splice(beginIdx, nextMarker - beginIdx);
-    } else {
-      kept.splice(beginIdx, 1);
-      log.warn(
-        `found an unterminated ${CLI_BIN} init marker in the rc file; removed the marker line only — check the file manually`,
-      );
-    }
   }
-  return kept.join('\n');
+  return out.join('\n');
 }
 
 /** 确保文件末尾恰好包含一个该类型的标记块；返回最终文件内容 */
 export function upsertRcContent(content: string, type: SdkTypeId): string {
-  const stripped = stripRcBlock(content, type).replace(/\s+$/, '');
-  return `${stripped}\n\n${rcBlock(type)}\n`;
+  // 只裁行尾换行，不裁 \r 之外的空白（\s 会把 CRLF 文件最后的 CR 也吃掉）
+  const stripped = stripRcBlock(content, type).replace(/(?:\r?\n)+\s*$/, '');
+  const crlf = (content.match(/\r\n/g) ?? []).length;
+  const lf = (content.match(/(?<!\r)\n/g) ?? []).length;
+  const eol = crlf > lf ? '\r\n' : '\n';
+  const block = rcBlock(type).replaceAll('\n', eol);
+  return `${stripped}${eol}${eol}${block}${eol}`;
+}
+
+/** 原子写 rc：tmp+rename，避免 O_TRUNC 直接写在写一半崩溃时截断用户文件 */
+function writeRcAtomic(file: string, content: string): void {
+  const tmp = `${file}.sdkvm-tmp-${process.pid}`;
+  let mode: number | undefined;
+  try {
+    mode = fs.statSync(file).mode & 0o777;
+  } catch {
+    // 目标不存在（首次写入）：用默认权限
+  }
+  try {
+    fs.writeFileSync(tmp, content, { mode });
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      // 清不掉的 tmp 下次写入会覆盖同名文件
+    }
+    throw err;
+  }
 }
 
 /** 写入 rc 文件（不存在则创建）。非 UTF-8 内容先备份，避免替换字符写回造成永久破坏 */
@@ -141,7 +168,7 @@ export function upsertRcFile(file: string, type: SdkTypeId): void {
     fs.copyFileSync(file, bak);
     log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
   }
-  fs.writeFileSync(file, upsertRcContent(content, type));
+  writeRcAtomic(file, upsertRcContent(content, type));
 }
 
 export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {
@@ -156,6 +183,6 @@ export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {
     fs.copyFileSync(file, bak);
     log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
   }
-  fs.writeFileSync(file, stripped);
+  writeRcAtomic(file, stripped);
 }
 

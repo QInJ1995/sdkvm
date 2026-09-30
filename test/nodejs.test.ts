@@ -113,6 +113,30 @@ describe('nodejs vendor', () => {
       { key: '20', lts: false, latestFullVersion: '20.1.0' },
     ]);
   });
+
+  it('a missing lts field is not treated as LTS (only a codename string is)', async () => {
+    // 索引结构变更/字段缺失时，"lts !== false" 会把 Current 当 LTS；只有字符串代号才算
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL | Request) => {
+        const u = String(url);
+        if (u.endsWith('/index.json')) {
+          return Response.json([
+            { version: 'v24.2.0', lts: 'Krypton' },
+            { version: 'v22.3.1' }, // lts 字段缺失
+          ]);
+        }
+        const m = /\/(v[\d.]+)\/SHASUMS256\.txt$/.exec(u);
+        if (m && m[1]) return new Response(shasums(m[1]));
+        throw new Error(`unexpected fetch: ${u}`);
+      }),
+    );
+    const a = await nodejsVendor.resolve({ kind: 'lts' }, MAC);
+    expect(a.dirName).toBe('nodejs-24.2.0');
+    const lines = await nodejsVendor.listMajors();
+    expect(lines.find((l) => l.key === '22')?.lts).toBe(false);
+    expect(lines.find((l) => l.key === '24')?.lts).toBe(true);
+  });
 });
 
 describe('isNodeLtsMajor', () => {

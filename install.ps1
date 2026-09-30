@@ -40,6 +40,19 @@ function Get-FileSha256([string]$path) {
   (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
 }
 
+# IWR 瞬时失败（TLS 握手抖动、CDN 503）重试两次；$ErrorActionPreference 对原生退出码无效，但对 cmdlet 抛错有效
+function Get-Url([string]$url, [string]$out) {
+  for ($i = 1; $i -le 3; $i++) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out
+      return
+    } catch {
+      if ($i -eq 3) { throw }
+      Start-Sleep -Seconds (2 * $i)
+    }
+  }
+}
+
 function Get-ExpectedHash([string]$sumsPath, [string]$fileName) {
   foreach ($line in Get-Content -Path $sumsPath) {
     if ($line -match '^([0-9a-fA-F]{64})\s+\*?(\S+)\s*$' -and $Matches[2] -eq $fileName) {
@@ -62,16 +75,16 @@ function Remove-Junction([string]$path) {
 
 try {
   Write-Host "sdkvm: downloading Node.js $RuntimeNode (windows/$arch)"
-  Invoke-WebRequest -UseBasicParsing -Uri "$NodeDist/v$RuntimeNode/$nodeArchive" -OutFile (Join-Path $tmpdir $nodeArchive)
-  Invoke-WebRequest -UseBasicParsing -Uri "$NodeDist/v$RuntimeNode/SHASUMS256.txt" -OutFile (Join-Path $tmpdir 'SHASUMS256.txt')
+  Get-Url "$NodeDist/v$RuntimeNode/$nodeArchive" (Join-Path $tmpdir $nodeArchive)
+  Get-Url "$NodeDist/v$RuntimeNode/SHASUMS256.txt" (Join-Path $tmpdir 'SHASUMS256.txt')
   $expected = Get-ExpectedHash (Join-Path $tmpdir 'SHASUMS256.txt') $nodeArchive
   $actual = Get-FileSha256 (Join-Path $tmpdir $nodeArchive)
   if (-not $expected -or $expected -ne $actual) { throw 'sdkvm: Node.js checksum mismatch' }
 
   Write-Host 'sdkvm: downloading CLI'
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/latest/download/sdkvm.tgz" -OutFile (Join-Path $tmpdir 'sdkvm.tgz')
-    Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseBase/latest/download/SHA256SUMS" -OutFile (Join-Path $tmpdir 'SHA256SUMS')
+    Get-Url "$ReleaseBase/latest/download/sdkvm.tgz" (Join-Path $tmpdir 'sdkvm.tgz')
+    Get-Url "$ReleaseBase/latest/download/SHA256SUMS" (Join-Path $tmpdir 'SHA256SUMS')
   } catch {
     throw "sdkvm: download failed ($ReleaseBase/latest/download/sdkvm.tgz). Publish a GitHub Release (push a v* tag) with sdkvm.tgz, or install via: npm install -g sdkvm"
   }
@@ -82,8 +95,15 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $Root 'runtime'), $BinDir | Out-Null
   $runtimeDir = Join-Path $Root 'runtime'
   if (Test-Path (Join-Path $runtimeDir $nodeName)) { Remove-Item -Recurse -Force (Join-Path $runtimeDir $nodeName) }
+  # PS 5.1 里原生命令非零退出不触发 $ErrorActionPreference，必须显式查 $LASTEXITCODE
   tar -xf (Join-Path $tmpdir $nodeArchive) -C $runtimeDir
+  if ($LASTEXITCODE -ne 0) { throw "sdkvm: failed to extract the Node.js archive (tar exit $LASTEXITCODE)" }
+  if (-not (Test-Path -LiteralPath (Join-Path $runtimeDir $nodeName))) { throw "sdkvm: Node.js archive did not extract $nodeName" }
   $current = Join-Path $runtimeDir 'current'
+  # current 若是真实目录（非 junction）可能是用户自己放的内容，不能当链接摘除
+  if ((Test-Path -LiteralPath $current) -and -not ((Get-Item -LiteralPath $current -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+    throw "sdkvm: $current exists and is not a junction; move it away and retry"
+  }
   Remove-Junction $current
   New-Item -ItemType Junction -Path $current -Target (Join-Path $runtimeDir $nodeName) | Out-Null
 
@@ -95,6 +115,7 @@ try {
   if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
   New-Item -ItemType Directory -Path $staging | Out-Null
   tar -xf (Join-Path $tmpdir 'sdkvm.tgz') -C $staging
+  if ($LASTEXITCODE -ne 0) { throw "sdkvm: failed to extract the CLI archive (tar exit $LASTEXITCODE)" }
   $unpacked = Join-Path $staging 'package'
   if (-not (Test-Path (Join-Path $unpacked 'package.json'))) {
     Remove-Item -Recurse -Force $staging

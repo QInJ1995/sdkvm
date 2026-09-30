@@ -103,9 +103,28 @@ export function loadConfig(): SdkvmConfig {
   return config;
 }
 
+/** 清理崩溃残留的 .config.json.tmp-*（写完 tmp、rename 前进程死掉就永远留一个） */
+function sweepConfigTmp(dir: string): void {
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith('.config.json.tmp-')) continue;
+      const file = path.join(dir, name);
+      try {
+        // 只按年龄清：1 小时内的可能是并发会话刚写的（锁本应串行化，这里再兜一层）
+        if (Date.now() - fs.statSync(file).mtimeMs > 3_600_000) fs.rmSync(file, { force: true });
+      } catch {
+        // 竞态消失即达成目的
+      }
+    }
+  } catch {
+    // 列不出目录就算了
+  }
+}
+
 export function saveConfig(config: SdkvmConfig): void {
   ensureLayout();
   const file = paths.config();
+  sweepConfigTmp(path.dirname(file));
   const tmp = path.join(path.dirname(file), `.config.json.tmp-${process.pid}`);
   fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
   fs.renameSync(tmp, file);
@@ -123,6 +142,11 @@ export function updateConfig(mutator: (config: SdkvmConfig) => void): SdkvmConfi
     saveConfig(config);
     return config;
   } finally {
-    releaseLock();
+    // 保存已成功：释放失败（Windows 杀软短暂锁目录）不应把成功操作报成失败
+    try {
+      releaseLock();
+    } catch (err) {
+      log.warn(`failed to release the sdkvm lock: ${(err as Error).message}`);
+    }
   }
 }

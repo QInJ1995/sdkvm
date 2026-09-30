@@ -71,6 +71,32 @@ describe('registry', () => {
     expect(() => findInstalled('java', '21.5')).toThrow(/matches "21\.5"/);
   });
 
+  it('--vendor 大小写不敏感', () => {
+    mkJdk('corretto-21.0.5.6.1');
+    mkJdk('temurin-21.0.5+11');
+    // 输入前缀（parseUserSpec）会 toLowerCase；--vendor 参数此前没有，会静默过滤成空集
+    expect(findInstalled('java', '21', 'Corretto').dirPath.endsWith('corretto-21.0.5.6.1')).toBe(true);
+  });
+
+  it('同版本跨 vendor 并存时优先 defaultVendor', () => {
+    mkJdk('temurin-21.0.5+11');
+    mkJdk('zulu-21.0.5+11');
+    // 默认 temurin：不再由 localeCompare 字母序决定
+    expect(findInstalled('java', '21.0.5').dirPath.endsWith('temurin-21.0.5+11')).toBe(true);
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      JSON.stringify({ version: 1, defaultVendor: 'zulu', mirror: {}, npmRegistries: {}, mavenRegistries: {}, mavenSettings: '' }),
+    );
+    expect(findInstalled('java', '21.0.5').dirPath.endsWith('zulu-21.0.5+11')).toBe(true);
+  });
+
+  it('输入带 build 时不再被 norm 折叠误配到其它 build', () => {
+    mkJdk('temurin-21.0.5+9');
+    // 21.0.5（不带 build）仍应命中；21.0.5+11 是另一个构建，不能命中 +9
+    expect(findInstalled('java', '21.0.5').dirPath.endsWith('temurin-21.0.5+9')).toBe(true);
+    expect(() => findInstalled('java', '21.0.5+11')).toThrow(/matches "21\.0\.5\+11"/);
+  });
+
   it('lts match', () => {
     mkJdk('temurin-21.0.5+11');
     mkJdk('temurin-22.0.1+2');

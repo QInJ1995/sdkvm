@@ -660,6 +660,9 @@ Miniconda 追加 `%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、
 
 安装、切换、卸载、`upgrade`、`mrm use` 等写操作持有 `~/.sdkvm/.lock` 排他锁:
 
+- 锁只覆盖**变更阶段**:安装的下载、校验、解压都在锁外进行(只写
+  `cache/`、`tmp/` 下的私有临时文件),互斥仅覆盖安装目录的换位与安装器
+  执行。下载几百 MB 的归档期间,`use` / `uninstall` / `ls` 照常可用。
 - 已有操作进行中时,新操作立即失败并提示(`Another sdkvm operation is in
   progress`),附手动清理锁文件的指引。
 - 锁文件记录持有进程 PID 与心跳时间戳;持有期间定期刷新心跳。持锁进程已退出、
@@ -764,7 +767,7 @@ sdkvm miniconda mirror use tuna
 | 站点 | Java (temurin) | Go | Flutter | Node.js | Maven | Miniconda | Python |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `nju` | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
-| `tuna` | ✓ | — | ✓ | —(归档不全,未收录) | — | ✓ | — |
+| `tuna` | ✓ | — | —(目录已下线,未收录) | —(归档不全,未收录) | — | ✓ | — |
 | `aliyun` | — | ✓ | — | ✓ | ✓ | — | — |
 | `huawei` | — | — | — | ✓ | ✓ | — | — |
 | `ustc` | — | — | — | — | — | ✓ | — |
@@ -776,7 +779,7 @@ sdkvm miniconda mirror use tuna
 | --- | --- |
 | Temurin | Adoptium 目录结构;已验证 [NJU](https://mirrors.nju.edu.cn/adoptium)、[TUNA](https://mirrors.tuna.tsinghua.edu.cn/Adoptium) |
 | Go | 文件名拼接在根 URL 后;如 `nju` / `aliyun` |
-| Flutter | 桶前缀替换;已验证 [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release)。不要使用 `storage.flutter-io.cn`(无发布清单) |
+| Flutter | 桶前缀替换;已验证 [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release)。不要使用 `storage.flutter-io.cn`(无发布清单)或 TUNA flutter(目录已下线,404) |
 | Node.js | 前缀替换;已验证 [NJU](https://mirror.nju.edu.cn/nodejs-release)。不要使用 TUNA nodejs-release(缺归档) |
 | Maven | Central 路径前缀替换;已验证[阿里云 central](https://maven.aliyun.com/repository/central)、[华为云 maven](https://repo.huaweicloud.com/repository/maven) |
 | Miniconda | 安装器目录前缀替换;已验证 NJU / TUNA / USTC。阿里云无该目录,未收录 |
@@ -864,7 +867,7 @@ fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVE
 
 ### Flutter 下载慢或中断
 
-先 `sdkvm flutter mirror use nju`(或 `tuna`)。超时条件是 60 秒无数据,稳定
+先 `sdkvm flutter mirror use nju`(TUNA 的 flutter 目录已下线,不可用)。超时条件是 60 秒无数据,稳定
 慢速不会中断。中断后直接重跑 `install`,不会留下半成品。
 
 ### 安装 Flutter beta

@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import type { ResolvedArtifact } from '../vendor/types.js';
 import { HttpError, httpText } from './http.js';
+import { cacheFileName } from './download.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
 
@@ -34,11 +35,19 @@ export function parseSha256SumLine(line: string): { hash: string; name: string }
 
 /**
  * 从校验源文本提取期望值：
- * - "<hash>" / "<hash>  filename"（.sha1 / .sha256 / .sha512）
+ * - "<hash>" / "<hash>  filename"（.sha1 / .sha256 / .sha512，GNU 格式，可多行）
+ * - BSD 格式 "SHA256 (file) = hash"（shasum --tag / openssl dgst）
  * - Adoptium 资产 JSON 的 checksum，或当前 *.tar.gz.json 元数据的 sha256
  * - 旧版元数据 hashes[].content（alg 为 SHA-256）
+ *
+ * 多行 sums 文件（整份 release 的 SHA256SUMS）优先取文件名匹配 artifactName 的行，
+ * 避免"第一条哈希恰好是别的资产"导致必败或误配；单行/裸哈希文件退回第一个命中。
  */
-export function extractExpectedChecksum(text: string, kind: ChecksumKind = 'sha256'): string | null {
+export function extractExpectedChecksum(
+  text: string,
+  kind: ChecksumKind = 'sha256',
+  artifactName?: string,
+): string | null {
   const trimmed = text.trim();
   if (kind === 'sha256' && trimmed.startsWith('{')) {
     try {
@@ -65,8 +74,41 @@ export function extractExpectedChecksum(text: string, kind: ChecksumKind = 'sha2
     }
     return null;
   }
-  const token = trimmed.split(/\s+/)[0] ?? '';
-  return hexOf(token, kind);
+  const hexLen = kind === 'sha512' ? 128 : kind === 'sha1' ? 40 : 64;
+  // BSD 标签家族：SHA256 / SHA-256 / SHA2-256（openssl 3.x）——"2" 与 "-" 各自可选
+  const tag = kind === 'sha512' ? 'SHA2?-?512' : kind === 'sha1' ? 'SHA2?-?1' : 'SHA2?-?256';
+  const gnuRe = new RegExp(`^([0-9a-f]{${hexLen}})\\s+\\*?([^\\s*].*?)\\s*$`, 'i');
+  const bareRe = new RegExp(`^([0-9a-f]{${hexLen}})$`, 'i');
+  const bsdRe = new RegExp(`^${tag}\\s*\\(([^)]*)\\)\\s*=\\s*([0-9a-f]{${hexLen}})$`, 'i');
+  let first: string | null = null;
+  for (const line of trimmed.split(/\r?\n/)) {
+    const l = line.trim();
+    if (!l) continue;
+    let hash: string | null = null;
+    let name: string | null = null;
+    const gnu = gnuRe.exec(l) ?? bareRe.exec(l);
+    if (gnu) {
+      hash = gnu[1] ?? null;
+      name = (gnu[2] ?? '').trim() || null;
+    } else {
+      const bsd = bsdRe.exec(l);
+      if (bsd) {
+        hash = bsd[2] ?? null;
+        name = (bsd[1] ?? '').trim() || null;
+      }
+    }
+    if (!hash) continue;
+    const norm = hash.toLowerCase();
+    first ??= norm;
+    if (
+      artifactName &&
+      name &&
+      (name === artifactName || name === `./${artifactName}` || name.endsWith(`/${artifactName}`))
+    ) {
+      return norm;
+    }
+  }
+  return first;
 }
 
 /** 对已落盘的归档再算一遍哈希（Maven 的官方旁路是 sha512，下载流只累计 sha256） */
@@ -136,8 +178,10 @@ async function loadChecksum(
 ): Promise<ChecksumHit | null> {
   let missing = false;
   let networkErr: unknown;
+  // 校验文件可能是整份 release 的多行 sums：按归档文件名挑行，避免拿到别的资产的哈希
+  const artifactName = cacheFileName(artifact.downloadUrl);
   try {
-    const expected = extractExpectedChecksum(await httpText(officialUrl), primaryKind);
+    const expected = extractExpectedChecksum(await httpText(officialUrl), primaryKind, artifactName);
     if (expected) return { expected, kind: primaryKind };
     missing = true;
   } catch (err) {
@@ -151,7 +195,7 @@ async function loadChecksum(
   const sha1Url = sha1Sidecar(officialUrl);
   if (missing && sha1Url) {
     try {
-      const expected = extractExpectedChecksum(await httpText(sha1Url), 'sha1');
+      const expected = extractExpectedChecksum(await httpText(sha1Url), 'sha1', artifactName);
       if (expected) {
         log.warn(`no ${primaryKind} sidecar for ${artifact.displayName}, verifying with sha1`);
         return { expected, kind: 'sha1' };

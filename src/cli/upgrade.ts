@@ -8,6 +8,7 @@ import { detectPlatform } from '../core/platform.js';
 import { downloadFile } from '../net/download.js';
 import { httpText } from '../net/http.js';
 import { extractArchive } from '../fs/extract.js';
+import { assertContained } from '../fs/layout.js';
 import { parseSha256SumLine } from '../net/checksum.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
@@ -69,6 +70,9 @@ export async function prepareCliPackage(archiveFile: string, home = sdkvmHome())
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(home, { recursive: true });
   await extractArchive(archiveFile, 'tar.gz', staging, detectPlatform());
+  // 与安装路径同款收尾审计：外部 tar 对 `..`/符号链接的处理因实现而异，
+  // 条目不得逃逸 staging、符号链接不得外指
+  assertContained(staging, staging);
   const unpacked = path.join(staging, 'package');
   if (!fs.existsSync(path.join(unpacked, 'package.json'))) {
     fs.rmSync(staging, { recursive: true, force: true });
@@ -116,15 +120,27 @@ export function windowsUpgradeScript(home: string): string {
     `set "HOME=${home}"`,
     'timeout /t 2 /nobreak >nul',
     'if exist "%HOME%\\cli.bak" rmdir /s /q "%HOME%\\cli.bak"',
-    'if exist "%HOME%\\cli" move /y "%HOME%\\cli" "%HOME%\\cli.bak" >nul',
-    'move /y "%HOME%\\cli.next\\package" "%HOME%\\cli" >nul',
-    'if exist "%HOME%\\cli\\package.json" (',
-    '  if exist "%HOME%\\cli.bak" rmdir /s /q "%HOME%\\cli.bak"',
-    '  if exist "%HOME%\\cli.next" rmdir /s /q "%HOME%\\cli.next"',
-    ') else (',
-    '  if exist "%HOME%\\cli.bak" if not exist "%HOME%\\cli" move /y "%HOME%\\cli.bak" "%HOME%\\cli" >nul',
+    // 第一步失败时 cli 仍在原位：绝不能把 cli.next\\package move 进现存的 cli
+    // （move /y 目标为目录时会嵌套进去，污染旧安装）
+    'if exist "%HOME%\\cli" (',
+    '  move /y "%HOME%\\cli" "%HOME%\\cli.bak" >nul || goto :rollback',
+    '  if exist "%HOME%\\cli" goto :rollback',
     ')',
+    'move /y "%HOME%\\cli.next\\package" "%HOME%\\cli" >nul || goto :rollback',
+    'if not exist "%HOME%\\cli\\package.json" goto :rollback',
+    'if exist "%HOME%\\cli.bak" rmdir /s /q "%HOME%\\cli.bak"',
+    'if exist "%HOME%\\cli.next" rmdir /s /q "%HOME%\\cli.next"',
     'del "%~f0"',
+    'exit /b 0',
+    // 回滚只在存在 bak 时清掉 cli：bak 不在说明换位从未开始，cli 是完好的旧版本
+    ':rollback',
+    'if exist "%HOME%\\cli.bak" (',
+    '  if exist "%HOME%\\cli" rmdir /s /q "%HOME%\\cli"',
+    '  move /y "%HOME%\\cli.bak" "%HOME%\\cli" >nul',
+    ')',
+    'if exist "%HOME%\\cli.next" rmdir /s /q "%HOME%\\cli.next"',
+    'del "%~f0"',
+    'exit /b 1',
     '',
   ].join('\r\n');
 }
@@ -188,7 +204,6 @@ export async function upgradeCommand(): Promise<void> {
       );
     } finally {
       fs.rmSync(dest, { force: true });
-      fs.rmSync(`${dest}.part`, { force: true });
     }
   });
 }

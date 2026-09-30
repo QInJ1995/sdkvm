@@ -93,7 +93,19 @@ function preserveLeadingZeros(v: SdkVersion): string | null {
 export function formatVersion(v: SdkVersion): string {
   const preserved = preserveLeadingZeros(v);
   if (preserved) return preserved;
-  if (v.patch !== null && v.minor === 0 && v.patch === 0 && !v.extra && !v.build) return String(v.major);
+  // 只有版本正文本身就是裸 major（用户输入 "21"/"temurin-21"、目录名 temurin-21 回读）时才折叠；
+  // API 派生的三段 [21,0,0]（Zulu GA 的 java_version 数组、latest 重定向解析出的版本）保持 21.0.0，
+  // 否则 GA 版本会塌成 "21"，和按 major 安装的目录混在一起无法区分
+  if (
+    v.patch !== null &&
+    v.minor === 0 &&
+    v.patch === 0 &&
+    !v.extra &&
+    !v.build &&
+    javaVersionToken(v.raw) === String(v.major)
+  ) {
+    return String(v.major);
+  }
   let s = `${v.major}.${v.minor}.${v.patch ?? 0}`;
   if (v.extra) s += `.${v.extra}`;
   if (v.build) s += `+${v.build}`;

@@ -2,6 +2,9 @@ import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './ty
 import { httpFetch, httpText, HttpError } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
+import { detectPlatform } from '../core/platform.js';
+import { temurinVendor } from './temurin.js';
+import { cmdPath } from '../cli/cmdname.js';
 import { log } from '../ui/log.js';
 
 /**
@@ -17,8 +20,6 @@ export function canonicalCorrettoVersion(input: string): string {
 }
 
 const BASE = 'https://corretto.aws/downloads';
-/** Corretto 只发布 LTS 线；major 集从 Adoptium 对齐的 LTS_MAJORS 派生 */
-const MAJORS = [...LTS_MAJORS].sort((a, b) => a - b);
 
 /** latest 重定向入口的文件名（已验证：aarch64-macos / x64-linux / x64-windows） */
 function latestFileName(major: number, platform: VendorPlatform): string {
@@ -46,7 +47,7 @@ async function resolveLatestVersion(major: number, platform: VendorPlatform): Pr
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) {
       throw new SdkvmError(`No Corretto JDK ${major} build for ${platform.os}/${platform.arch}`, {
-        hint: 'This platform is not published for that major. Try another vendor, for example: sdkvm java install 21 --vendor temurin',
+        hint: `Corretto does not publish every major/platform combination. Run \`${cmdPath('java')} ls -r --vendor corretto\` to see the lines, or try another vendor: ${cmdPath('java')} install ${major} --vendor temurin`,
       });
     }
     throw err;
@@ -84,29 +85,49 @@ export const correttoVendor: Vendor = {
   supportsFullVersionList: false,
 
   async listMajors(): Promise<ReleaseLine[]> {
-    // Corretto 无公开列表 API；只发布 LTS。latestFullVersion 由 resolve 时按需获取。
-    return MAJORS.map((major) => ({ key: String(major), lts: LTS_MAJORS.has(major) }));
+    // Corretto 无公开列表 API，且不只发 LTS（22/24/26 等中间版都在线）。
+    // 与 Zulu 相同的思路：以 Adoptium 的发布节奏为 major 全集，逐个探测 latest 重定向，
+    // 探测不到（该 major/平台没发）就隐藏该行。
+    const universe = await temurinVendor.listMajors();
+    const platform = detectPlatform();
+    const failed: string[] = [];
+    const results = await Promise.all(
+      universe.map(async ({ key }): Promise<ReleaseLine | null> => {
+        try {
+          const latest = await resolveLatestVersion(Number(key), platform);
+          return { key, lts: LTS_MAJORS.has(Number(key)), latestFullVersion: latest };
+        } catch {
+          failed.push(key);
+          return null;
+        }
+      }),
+    );
+    if (failed.length > 0) {
+      if (failed.length === universe.length) {
+        throw new SdkvmError(`Corretto listing failed for all majors (${failed.join(', ')})`);
+      }
+      log.warn(`Corretto listing failed for majors ${failed.join(', ')}; those lines are hidden`);
+    }
+    return results.filter((r): r is ReleaseLine => r !== null);
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
     let version: string;
     let majorSha: string | null = null;
     if (spec.kind === 'lts') {
-      const latestLts = Math.max(...MAJORS);
+      const latestLts = Math.max(...LTS_MAJORS);
       version = await resolveLatestVersion(latestLts, platform);
       majorSha = await fetchLatestSha256(latestLts, platform);
     } else if (spec.kind === 'major') {
-      if (!MAJORS.includes(spec.major)) {
-        throw new SdkvmError(`Corretto does not publish JDK ${spec.major}`, {
-          hint: `Available majors: ${MAJORS.join(', ')}`,
-        });
-      }
+      // 不再预判 major 是否存在：latest 重定向的 404 已给出准确错误
       version = await resolveLatestVersion(spec.major, platform);
       majorSha = await fetchLatestSha256(spec.major, platform);
     } else if (spec.kind === 'full') {
       const v = parseVersion('corretto', spec.version);
-      if (!MAJORS.includes(v.major)) {
-        throw new SdkvmError(`Corretto does not publish JDK ${v.major}`);
+      if (v.build != null) {
+        throw new SdkvmError(`Corretto versions have no "+build" segment: "${spec.version}"`, {
+          hint: `Use the Corretto form like 21.0.8.9.1 (8.504.01.1 for JDK 8), or install by major: ${cmdPath('java')} install ${v.major} --vendor corretto`,
+        });
       }
       version = spec.version;
     } else {

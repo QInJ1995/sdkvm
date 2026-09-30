@@ -2,7 +2,11 @@ import { SdkvmError } from '../util/errors.js';
 import { getVersion } from '../cli/misc.js';
 
 const UA = `sdkvm/${getVersion()} (npm sdkvm)`;
+/** 连接/响应头预算：只覆盖到 fetch 返回，body 阶段另有 BODY_TIMEOUT_MS。
+ * AbortSignal.timeout 是总时长——直接套在整个请求上会把慢速大响应体在 30s 处掐断。 */
 const CONNECT_TIMEOUT_MS = 30_000;
+/** 元数据响应体（JSON/文本）的读取预算：到点取消连接并按网络错误重试 */
+const BODY_TIMEOUT_MS = 60_000;
 const RETRIES = 3;
 
 export class HttpError extends SdkvmError {
@@ -21,10 +25,49 @@ async function releaseBody(res: Response): Promise<void> {
   await res.body?.cancel()?.catch(() => undefined);
 }
 
+/** undici 把真实原因（ENOTFOUND / ECONNREFUSED / ERR_TLS_*）放在 err.cause；
+ *  只留 err.message 会全部退化成无信息量的 "fetch failed"。 */
+function describeErr(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = err.cause as { code?: string; message?: string } | undefined;
+  const detail = cause?.code ?? cause?.message;
+  return detail ? `${err.message}: ${detail}` : err.message;
+}
+
+/** read 到点未完成即放弃（连接随后由调用方释放），按可重试错误抛出 */
+function withReadBudget<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TypeError(`response body timed out after ${ms / 1000}s`)), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
-  const signal = init.signal ?? AbortSignal.timeout(CONNECT_TIMEOUT_MS);
-  const res = await fetch(url, { ...init, signal, headers: { 'user-agent': UA, ...init.headers } });
-  return res;
+  // 调用方自带 signal（downloadFile 的空闲超时）原样透传；否则只给"到响应头为止"的
+  // 预算：fetch 返回即停表。AbortSignal.timeout 会跟着请求走到底，慢速大响应体
+  // 会在 30s 处被整体掐断（元数据 API 常见），body 阶段交给 withReadBudget。
+  if (init.signal) {
+    return fetch(url, { ...init, signal: init.signal, headers: { 'user-agent': UA, ...init.headers } });
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(
+    () => ac.abort(new Error(`no response within ${CONNECT_TIMEOUT_MS / 1000}s`)),
+    CONNECT_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(url, { ...init, signal: ac.signal, headers: { 'user-agent': UA, ...init.headers } });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** https 请求被重定向降级到 http 时拒绝（fetch 默认会跟随降级）；抛错前释放 body */
@@ -76,27 +119,33 @@ export async function httpFetch(url: string, init: RequestInit = {}): Promise<Re
   }
   if (lastErr instanceof SdkvmError) throw lastErr;
   throw new SdkvmError(`Network error after ${RETRIES} attempts: ${url}`, {
-    hint: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    hint: describeErr(lastErr),
   });
 }
 
 /**
  * 读 body 也纳入重试：连接中途断开时 res.text()/res.json() 才失败，
  * fetch 本身已"成功"，原实现会把这类瞬时错误直接抛给上层。
+ * 只重试网络类读取失败（undici 一律抛 TypeError）；JSON 语法错（镜像返回 HTML 之类）
+ * 是确定性错误，重试三次只是白等。
  */
 async function withBodyRetry<T>(url: string, init: RequestInit, read: (res: Response) => Promise<T>): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= RETRIES; attempt++) {
     const res = await httpFetch(url, init);
     try {
-      return await read(res);
+      return await withReadBudget(read(res), BODY_TIMEOUT_MS);
     } catch (err) {
+      await releaseBody(res);
       lastErr = err;
+      if (!(err instanceof TypeError)) {
+        throw new SdkvmError(`Failed to read the response from ${url}: ${describeErr(err)}`);
+      }
       if (attempt < RETRIES) await sleep(500 * 2 ** (attempt - 1));
     }
   }
   throw new SdkvmError(`Network error reading response body: ${url}`, {
-    hint: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    hint: describeErr(lastErr),
   });
 }
 

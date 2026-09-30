@@ -1,4 +1,5 @@
 import { currentSdk, listInstalled } from '../core/registry.js';
+import { readCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
 import { SDK_TYPES } from '../sdk/index.js';
 import type { SdkTypeId } from '../sdk/types.js';
@@ -87,7 +88,15 @@ export function currentCommand(types: readonly SdkTypeId[] = SDK_TYPES): void {
   for (const type of types) {
     const spec = getSdkType(type);
     const current = currentSdk(type);
-    if (!current) continue;
+    if (!current) {
+      // 链接在、目标不在（安装被手动删除）：静默跳过会被当成"没有 current"，其实需要修复
+      const target = readCurrent(type);
+      if (target) {
+        log.warn(`${type}: current link is broken (points to ${target}, which is not installed)`);
+        log.warn(`fix with: ${cmdPath(type)} use <version>`);
+      }
+      continue;
+    }
     any = true;
     log.raw(`${type}: ${current.version.vendor}-${spec.formatVersion(current.version)}`);
     log.raw(`  ${spec.envVar} → ${current.home}`);

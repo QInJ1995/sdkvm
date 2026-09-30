@@ -22,7 +22,16 @@ afterEach(() => {
 describe('lock', () => {
   it('second acquire while held throws', () => {
     acquireLock();
-    expect(() => acquireLock()).toThrow(/Another sdkvm operation/);
+    let hint: string | undefined;
+    try {
+      acquireLock();
+      expect.unreachable('second acquire should throw');
+    } catch (err) {
+      hint = (err as { hint?: string }).hint;
+      expect((err as Error).message).toMatch(/Another sdkvm operation/);
+    }
+    // 提示给的是实际锁路径（SDKVM_HOME 自定义时不再是写死的 ~/.sdkvm/.lock）
+    expect(hint).toContain(path.join(home, '.lock'));
   });
 
   it('withLock releases on success and on throw', async () => {

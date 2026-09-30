@@ -7,7 +7,10 @@ import type { SdkTypeId } from '../sdk/types.js';
 
 /** SDKVM_HOME 可覆盖根目录（测试与自定义安装位置用） */
 export function sdkvmHome(): string {
-  return envGet('SDKVM_HOME') ?? path.join(os.homedir(), '.sdkvm');
+  const custom = envGet('SDKVM_HOME');
+  // 相对路径的 SDKVM_HOME 会让所有路径随 cwd 漂移（use 在项目目录跑、install 在 home 跑，
+  // current 链接与安装目录就分家了）；resolve 锚定为绝对路径
+  return custom ? path.resolve(custom) : path.join(os.homedir(), '.sdkvm');
 }
 
 export const paths = {

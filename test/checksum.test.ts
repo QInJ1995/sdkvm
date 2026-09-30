@@ -65,6 +65,31 @@ describe('extractExpectedChecksum', () => {
     expect(extractExpectedChecksum(JSON.stringify({ vendor: 'Eclipse Adoptium' }))).toBeNull();
     expect(extractExpectedChecksum('{')).toBeNull();
   });
+
+  it('reads BSD checksum format (shasum --tag / openssl dgst)', () => {
+    expect(extractExpectedChecksum(`SHA256 (maven.tar.gz) = ${hash}\n`)).toBe(hash);
+    // openssl 现代输出是 SHA2-256
+    expect(extractExpectedChecksum(`SHA2-256 (maven.tar.gz) = ${hash}\n`)).toBe(hash);
+    const sha1 = 'ab'.repeat(20);
+    expect(extractExpectedChecksum(`SHA1 (maven.zip) = ${sha1}\n`, 'sha1')).toBe(sha1);
+    // sha256 模式不认 SHA1 行
+    expect(extractExpectedChecksum(`SHA1 (maven.zip) = ${sha1}\n`)).toBeNull();
+  });
+
+  it('multi-entry sums file picks the line whose filename matches the artifact', () => {
+    const other = 'cd'.repeat(32);
+    const sums = `${other}  some-other-artifact.tar.gz\n${hash}  maven.tar.gz\n${other}  third.zip\n`;
+    expect(extractExpectedChecksum(sums, 'sha256', 'maven.tar.gz')).toBe(hash);
+    // ./ 前缀与子路径形式同样命中
+    expect(extractExpectedChecksum(`${other}  x.tar.gz\n${hash}  ./maven.tar.gz\n`, 'sha256', 'maven.tar.gz')).toBe(hash);
+    expect(extractExpectedChecksum(`${other}  x.tar.gz\n${hash}  rel/dir/maven.tar.gz\n`, 'sha256', 'maven.tar.gz')).toBe(hash);
+    // 文件名对不上时退回第一条（单行裸哈希文件的语义）
+    expect(extractExpectedChecksum(sums, 'sha256', 'not-present.tar.gz')).toBe(other);
+    // BSD 多行同理按文件名挑行
+    expect(
+      extractExpectedChecksum(`SHA256 (x.tar.gz) = ${other}\nSHA256 (maven.tar.gz) = ${hash}\n`, 'sha256', 'maven.tar.gz'),
+    ).toBe(hash);
+  });
 });
 
 describe('verifyChecksum', () => {

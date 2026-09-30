@@ -310,6 +310,39 @@ describe('zulu', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('follows x-pagination by total_pages (Azul never sends next_page)', async () => {
+    // 线上 x-pagination 实际形如 {"total":594,"total_pages":2,"page":1}——没有 next_page 字段
+    const old = {
+      name: 'zulu8.40.0.13-ca-jdk8.0.202-linux_x64.tar.gz',
+      download_url: 'https://cdn.azul.com/zulu8.0.202.tar.gz',
+      java_version: [8, 0, 202],
+      distro_version: [8, 40, 0, 13],
+    };
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const page = new URL(String(url)).searchParams.get('page');
+      if (page === '2') {
+        return new Response(JSON.stringify([old]), {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'x-pagination': JSON.stringify({ page: 2, total_pages: 2 }),
+          },
+        });
+      }
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-pagination': JSON.stringify({ page: 1, total_pages: 2 }),
+        },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const a = await zulu.resolve({ kind: 'full', version: '8.0.202' }, LIN);
+    expect(a.downloadUrl).toBe(old.download_url);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('no plain jdk → helpful error', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => resJson([packages[0]])));
     await expect(zulu.resolve({ kind: 'major', major: 21 }, MAC)).rejects.toThrow(/No Zulu JDK build matches/);
@@ -420,16 +453,54 @@ describe('corretto', () => {
     expect(win.downloadUrl).toContain('amazon-corretto-21.0.4.9.1-windows-x64-jdk.zip');
   });
 
-  it('unsupported major throws', async () => {
+  it('unknown major surfaces the latest-endpoint 404 as a clear error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
     await expect(correttoVendor.resolve({ kind: 'major', major: 22 }, MAC)).rejects.toThrow(
-      /does not publish/,
+      /No Corretto JDK 22 build for mac\/aarch64/,
     );
   });
 
-  it('listMajors static', async () => {
-    const majors = await correttoVendor.listMajors();
-    expect(majors.every((m) => m.lts)).toBe(true);
-    expect(majors.map((m) => m.key)).toEqual(['8', '11', '17', '21', '25']);
+  it('full spec with a "+build" segment is rejected with the Corretto syntax hint', async () => {
+    await expect(
+      correttoVendor.resolve({ kind: 'full', version: '21.0.5+11' }, MAC),
+    ).rejects.toThrow(/\+build/);
+  });
+
+  it('listMajors probes the latest redirect per major and hides unpublished lines', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('/v3/info/available_releases')) {
+          // Corretto 的 major 全集借道 Adoptium 节奏：8/17/21/22/25
+          return resJson({ available_releases: [8, 17, 21, 22, 25], available_lts_releases: [8, 17, 21, 25] });
+        }
+        if (u.includes('/latest/amazon-corretto-22-')) {
+          // Corretto 22 在该平台没发：latest 入口 404
+          return new Response(null, { status: 404 });
+        }
+        const m = /\/latest\/amazon-corretto-(\d+)-/.exec(u);
+        if (m && m[1]) {
+          return res30x(
+            `https://corretto.aws/downloads/resources/${m[1]}.0.8.9.1/amazon-corretto-${m[1]}-macosx-aarch64.tar.gz`,
+          );
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    try {
+      const majors = await correttoVendor.listMajors();
+      // 22 被探测失败隐藏；非 LTS major 不再被预门禁挡在门外
+      expect(majors.map((m) => m.key)).toEqual(['8', '17', '21', '25']);
+      expect(majors.every((m) => m.latestFullVersion === `${m.key}.0.8.9.1`)).toBe(true);
+      expect(majors.find((m) => m.key === '25')?.lts).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

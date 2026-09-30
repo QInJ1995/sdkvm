@@ -727,6 +727,11 @@ PowerShell is out of scope.
 Installs, switches, removals, `upgrade`, and `mrm use` hold the exclusive
 `~/.sdkvm/.lock`:
 
+- The lock covers only the **mutation phase**: an install's download,
+  verification, and extraction run outside it (they write only private
+  temporaries under `cache/` and `tmp/`); mutual exclusion covers the
+  install-directory swap and installer execution. While a multi-hundred-MB
+  archive downloads, `use` / `uninstall` / `ls` keep working.
 - While an operation holds the lock, a new one fails immediately with a hint
   (`Another sdkvm operation is in progress`) that includes how to clear the
   lock manually.
@@ -843,7 +848,7 @@ Coverage matrix (`✓` means the site mirrors that SDK):
 | Site | Java (temurin) | Go | Flutter | Node.js | Maven | Miniconda | Python |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `nju` | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
-| `tuna` | ✓ | — | ✓ | — (incomplete archives; not listed) | — | ✓ | — |
+| `tuna` | ✓ | — | — (directory offline; not listed) | — (incomplete archives; not listed) | — | ✓ | — |
 | `aliyun` | — | ✓ | — | ✓ | ✓ | — | — |
 | `huawei` | — | — | — | ✓ | ✓ | — | — |
 | `ustc` | — | — | — | — | — | ✓ | — |
@@ -855,7 +860,7 @@ Rewrite strategy and verified sites per vendor:
 | --- | --- |
 | Temurin | Adoptium directory layout; verified against [NJU](https://mirrors.nju.edu.cn/adoptium) and [TUNA](https://mirrors.tuna.tsinghua.edu.cn/Adoptium) |
 | Go | File name appended to the root; e.g. `nju` / `aliyun` |
-| Flutter | Bucket-prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release). Do not use `storage.flutter-io.cn` (no release manifest) |
+| Flutter | Bucket-prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/flutter/flutter_infra_release). Do not use `storage.flutter-io.cn` (no release manifest) or TUNA flutter (directory offline, 404) |
 | Node.js | Prefix replacement; verified against [NJU](https://mirror.nju.edu.cn/nodejs-release). Do not use TUNA nodejs-release (missing archives) |
 | Maven | Central path-prefix replacement; verified against [Aliyun central](https://maven.aliyun.com/repository/central) and [Huawei maven](https://repo.huaweicloud.com/repository/maven) |
 | Miniconda | Installer-directory prefix replacement; verified against NJU / TUNA / USTC. Aliyun does not host that directory |
@@ -957,9 +962,10 @@ fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVE
 
 ### Flutter downloads are slow or stop
 
-Run `sdkvm flutter mirror use nju` (or `tuna`) first. The timeout is 60 seconds
-without data, so a steady slow transfer continues. Re-run `install` after a
-real interruption; nothing partial is left behind.
+Run `sdkvm flutter mirror use nju` first (TUNA's flutter directory is offline
+and unusable). The timeout is 60 seconds without data, so a steady slow
+transfer continues. Re-run `install` after a real interruption; nothing
+partial is left behind.
 
 ### Install a Flutter beta
 

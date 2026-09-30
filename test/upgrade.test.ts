@@ -75,10 +75,17 @@ describe('checksumFor', () => {
 describe('windowsUpgradeScript', () => {
   it('only deletes bak after successful package.json presence and restores on failure', () => {
     const body = windowsUpgradeScript('C:\\sdkvm');
-    expect(body).toContain('if exist "%HOME%\\cli\\package.json"');
+    // 换位成功校验：package.json 不在则走回滚
+    expect(body).toContain('if not exist "%HOME%\\cli\\package.json" goto :rollback');
+    // 回滚只在 bak 存在时清 cli（bak 不在 = 换位从未开始，cli 是完好旧版本）
     expect(body).toContain('move /y "%HOME%\\cli.bak" "%HOME%\\cli"');
-    // 成功分支里才删 bak；失败分支不无条件 rmdir bak
-    const successBlock = body.slice(body.indexOf('if exist "%HOME%\\cli\\package.json"'));
+    // 第一步 move 失败（cli 未移走）绝不把 package move 进现存的 cli
+    expect(body).toContain('move /y "%HOME%\\cli" "%HOME%\\cli.bak" >nul || goto :rollback');
+    expect(body).toContain('if exist "%HOME%\\cli" goto :rollback');
+    // 成功路径（rollback 标签之前）才清理 bak 与 cli.next；
+    // indexOf 会先命中 goto :rollback 那行（在 package.json 门槛之前），必须取标签本身
+    const rollbackAt = body.lastIndexOf(':rollback');
+    const successBlock = body.slice(0, rollbackAt);
     expect(successBlock).toMatch(/package\.json[\s\S]*rmdir \/s \/q "%HOME%\\cli\.bak"/);
   });
 });

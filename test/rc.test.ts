@@ -234,4 +234,52 @@ describe('rc 标记行首锚定', () => {
     expect(out).toContain('export B=2');
     expect(out).not.toContain('JAVA_HOME');
   });
+
+  it('未闭合块之后没有其它 sdkvm 标记时，只删标记行、用户内容保留', () => {
+    const B = rcBegin('java');
+    const content = `export A=1\n${B}\nexport USER_KEEP=1\n`;
+    const out = stripRcBlock(content, 'java');
+    expect(out).not.toContain(B);
+    expect(out).toContain('export A=1');
+    expect(out).toContain('export USER_KEEP=1');
+  });
+
+  it('未闭合块删到下一个 sdkvm 标记行为止，其它类型的块不受影响', () => {
+    const BJ = rcBegin('java');
+    const BN = rcBegin('node');
+    const EN = rcEnd('node');
+    const content = `export A=1\n${BJ}\nexport ORPHAN=1\n${BN}\nexport NODE_HOME="x"\n${EN}\nexport B=2\n`;
+    const out = stripRcBlock(content, 'java');
+    expect(out).toContain('export A=1');
+    expect(out).toContain('export B=2');
+    expect(out).not.toContain('export ORPHAN');
+    // node 块完整保留
+    expect(out).toContain('export NODE_HOME="x"');
+    expect(out.split(BN).length - 1).toBe(1);
+  });
+
+  it('CRLF 文件 upsert 后块内也保持 CRLF', () => {
+    const content = 'export A=1\r\nexport B=2\r\n';
+    const out = upsertRcContent(content, 'java');
+    expect(out).toContain('export A=1\r\nexport B=2');
+    expect(out).toContain(`\r\n${rcBegin('java')}\r\n`);
+    expect(out).toContain('\r\nexport JAVA_HOME=');
+    expect(out.endsWith('\r\n')).toBe(true);
+  });
+
+  it('原子写不残留 tmp 文件', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-atomic-'));
+    const file = path.join(dir, '.zshrc');
+    try {
+      fs.writeFileSync(file, 'export A=1\n');
+      upsertRcFile(file, 'java');
+      removeRcBlockFromFile(file, 'java');
+      const residue = fs.readdirSync(dir).filter((n) => n.includes('sdkvm-tmp'));
+      expect(residue).toEqual([]);
+      // remove 会留下块前的分隔空行：只断言标记清除与用户内容保留
+      expect(fs.readFileSync(file, 'utf8').trim()).toBe('export A=1');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

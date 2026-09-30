@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { uninstallCommand } from '../src/cli/uninstall.js';
 import { currentSdk } from '../src/core/registry.js';
 import { detectPlatform } from '../src/core/platform.js';
-import { setCurrent } from '../src/fs/link.js';
+import { setCurrent, clearCurrent } from '../src/fs/link.js';
+import { SdkvmError } from '../src/util/errors.js';
 import { rcBegin, upsertRcContent } from '../src/shell/rc.js';
 
 let home: string;
@@ -70,5 +71,24 @@ describe.skipIf(process.platform === 'win32')('uninstall 当前版本', () => {
     expect(fs.existsSync(dir)).toBe(false);
     expect(currentSdk('java')?.dirPath).toBe(other);
     expect(fs.readFileSync(rc, 'utf8')).toContain(rcBegin('java'));
+  });
+});
+
+describe('current 链接位置被真实目录占用', () => {
+  it('setCurrent 拒绝并给出可读错误，而不是裸 EISDIR', () => {
+    const real = path.join(home, 'current-java');
+    fs.mkdirSync(real, { recursive: true });
+    expect(() => setCurrent('java', '/some/target', detectPlatform())).toThrow(SdkvmError);
+    expect(() => setCurrent('java', '/some/target', detectPlatform())).toThrow(/real directory/);
+    // 目录原样保留，绝不被删
+    expect(fs.existsSync(real)).toBe(true);
+  });
+
+  it('clearCurrent 跳过并保留目录，不做递归删除', () => {
+    const real = path.join(home, 'current-java');
+    fs.mkdirSync(path.join(real, 'user-file'), { recursive: true });
+    fs.writeFileSync(path.join(real, 'user-file', 'data.txt'), 'keep');
+    clearCurrent('java');
+    expect(fs.readFileSync(path.join(real, 'user-file', 'data.txt'), 'utf8')).toBe('keep');
   });
 });

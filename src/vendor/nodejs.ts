@@ -15,6 +15,11 @@ interface NodeIndexEntry {
   npm: string;
 }
 
+/** lts 字段只有字符串代号才算 LTS：false 明确是 Current，字段缺失/异常值不得当作 LTS */
+function isLtsEntry(e: NodeIndexEntry): boolean {
+  return typeof e.lts === 'string';
+}
+
 function tryParseEntry(e: NodeIndexEntry): SdkVersion | null {
   try {
     return parseNodeVersion('nodejs', e.version);
@@ -62,7 +67,7 @@ export const nodejsVendor: Vendor = {
       const v = tryParseEntry(e);
       if (!v || seen.has(v.major)) continue; // 降序遍历，首个即该 major 线最新
       seen.add(v.major);
-      lines.push({ key: String(v.major), lts: e.lts !== false, latestFullVersion: formatNodeVersion(v) });
+      lines.push({ key: String(v.major), lts: isLtsEntry(e), latestFullVersion: formatNodeVersion(v) });
     }
     return lines;
   },
@@ -73,7 +78,7 @@ export const nodejsVendor: Vendor = {
     if (spec.kind === 'latest') {
       entry = entries[0];
     } else if (spec.kind === 'lts') {
-      entry = entries.find((e) => e.lts !== false);
+      entry = entries.find((e) => isLtsEntry(e));
     } else if (spec.kind === 'major') {
       entry = entries.find((e) => tryParseEntry(e)?.major === spec.major);
     } else if (spec.kind === 'full') {

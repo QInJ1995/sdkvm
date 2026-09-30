@@ -66,7 +66,8 @@ describe('mirror presets', () => {
     expect(go).toEqual(['nju', 'aliyun', 'official']);
 
     const flutter = listMirrorSitesForType('flutter').map((s) => s.name);
-    expect(flutter).toEqual(['nju', 'tuna', 'official']);
+    // TUNA 的 /flutter 目录已下线(404),不再收录
+    expect(flutter).toEqual(['nju', 'official']);
 
     const node = listMirrorSitesForType('node').map((s) => s.name);
     expect(node).toEqual(['nju', 'aliyun', 'huawei', 'official']);
@@ -151,9 +152,9 @@ describe('mirrorCommand use / ls / current', () => {
   });
 
   it('use resolves aliases', () => {
-    mirrorCommand('flutter', 'use', 'tsinghua', undefined);
-    expect(loadConfig().mirror.flutter).toBe(
-      'https://mirrors.tuna.tsinghua.edu.cn/flutter/flutter_infra_release',
+    mirrorCommand('miniconda', 'use', 'tsinghua', undefined);
+    expect(loadConfig().mirror.miniconda).toBe(
+      'https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda',
     );
   });
 
