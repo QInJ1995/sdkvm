@@ -8,6 +8,7 @@ import { withLock } from '../core/lock.js';
 import { findInstalled } from '../core/registry.js';
 import { setCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
+import { recoverInterruptedInstalls } from './install.js';
 import type { SdkTypeId } from '../sdk/types.js';
 import { detectRcFile } from '../shell/detect.js';
 import { rcBegin, rcBlock, rcBlockFish, upsertRcFile } from '../shell/rc.js';
@@ -61,6 +62,9 @@ export async function useCommand(
   // 对象装箱：闭包内赋值、闭包外读取，裸 let 会被 TS 按初始值收窄成 never
   const envState: { error: Error | null } = { error: null };
   await withLock(async () => {
+    // 与 install/uninstall 相同的恢复：上次硬中断留下的 .incomplete 标记会把完好的
+    // 安装从 findInstalled 里藏掉（use 报"未安装"直到对该类型跑一次 install/uninstall）
+    recoverInterruptedInstalls(type);
     // 查找放进锁内：避免锁外 findInstalled 之后被并发卸载，current 指向已删除目录
     const installed = findInstalled(type, specInput, opts.vendor);
     label = `${installed.version.vendor}-${spec.formatVersion(installed.version)}`;

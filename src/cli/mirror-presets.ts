@@ -133,7 +133,9 @@ export function parseMirrorRootUrl(url: string): string {
   if (parsed.username || parsed.password) {
     throw new Error('mirror URL cannot include a username or password');
   }
-  if (parsed.search || parsed.hash) {
+  // 结尾裸 `?`/`#` 的 URL 对象 search/hash 为空串，判空拦不住，但 href 原样保留——
+  // 拼下载地址时会把 `?` 带进去。在原文上拦
+  if (/[?#]/.test(trimmed)) {
     throw new Error('mirror URL cannot include a query string or fragment');
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, '');

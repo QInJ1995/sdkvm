@@ -132,7 +132,7 @@ export function saveConfig(config: SdkvmConfig): void {
 
 /**
  * 在全局锁内读-改-写 config，避免 mirror/nrm/mrm 并发丢更新。
- * 调用方勿在已持有 withLock 的回调里再调（非可重入）。
+ * 可重入：lock.ts 的 heldDepth 计数使 withLock 回调里再调用也不会自锁死。
  */
 export function updateConfig(mutator: (config: SdkvmConfig) => void): SdkvmConfig {
   acquireLock();

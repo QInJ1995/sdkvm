@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
-import { httpFetch } from '../net/http.js';
+import { httpJson, httpJsonWithHeaders } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, compareVersions, formatVersion, parseVersion } from '../core/version.js';
 import { detectPlatform } from '../core/platform.js';
@@ -131,10 +131,11 @@ async function queryPackages(
     const url =
       `${API}/zulu/packages/?java_version=${encodeURIComponent(javaVersion)}&os=${os}&arch=${arch}` +
       `&hw_bitness=64&release_status=ga&page_size=${ZULU_PAGE_SIZE}&page=${page}`;
-    const res = await httpFetch(url, { headers: { accept: 'application/json' } });
-    const data = (await res.json()) as unknown;
+    // httpFetch + 手动 res.json() 只带了连接层预算：body 阶段挂起会一直吊着
+    // （分页循环里就是无限等待），httpJsonWithHeaders 把 body 读取也纳入超时与重试
+    const { data, headers } = await httpJsonWithHeaders<unknown>(url);
     if (Array.isArray(data)) out.push(...(data as ZuluPackage[]));
-    const next = nextZuluPage(res.headers.get('x-pagination'), page);
+    const next = nextZuluPage(headers.get('x-pagination'), page);
     if (next == null || next === page) break;
     page = next;
   }
@@ -148,10 +149,7 @@ async function queryPackages(
 async function hydrateChecksum(pkg: ZuluPackage): Promise<ZuluPackage> {
   if (pkg.sha256_hash || !pkg.package_uuid) return pkg;
   try {
-    const res = await httpFetch(`${API}/zulu/packages/${pkg.package_uuid}`, {
-      headers: { accept: 'application/json' },
-    });
-    const detail = (await res.json()) as { sha256_hash?: unknown };
+    const detail = await httpJson<{ sha256_hash?: unknown }>(`${API}/zulu/packages/${pkg.package_uuid}`);
     if (typeof detail.sha256_hash === 'string' && /^[0-9a-f]{64}$/i.test(detail.sha256_hash)) {
       return { ...pkg, sha256_hash: detail.sha256_hash.toLowerCase() };
     }

@@ -12,6 +12,7 @@ import { assertContained } from '../fs/layout.js';
 import { parseSha256SumLine } from '../net/checksum.js';
 import { sweepStaleParts } from './install.js';
 import { SdkvmError } from '../util/errors.js';
+import { renameWithRetry } from '../util/rename.js';
 import { log } from '../ui/log.js';
 import { getVersion } from './misc.js';
 
@@ -104,31 +105,50 @@ export async function prepareCliPackage(archiveFile: string, home = sdkvmHome())
 /** 用已校验的 npm pack 归档替换 CLI 目录，不动 runtime 与已装 SDK。 */
 export async function replaceCliPackage(archiveFile: string, home = sdkvmHome()): Promise<void> {
   const unpacked = await prepareCliPackage(archiveFile, home);
-  swapCliPackage(unpacked, home);
+  await swapCliPackage(unpacked, home);
 }
 
 /** 把 cli.next/package 换位成 cli（失败时回滚 bak）。unpacked 须已通过校验。 */
-function swapCliPackage(unpacked: string, home: string): void {
+async function swapCliPackage(unpacked: string, home: string): Promise<void> {
   const staging = path.join(home, 'cli.next');
   const bak = path.join(home, 'cli.bak');
   const cli = path.join(home, 'cli');
-  fs.rmSync(bak, { recursive: true, force: true });
-  if (fs.existsSync(cli)) fs.renameSync(cli, bak);
   try {
-    fs.renameSync(unpacked, cli);
+    fs.rmSync(bak, { recursive: true, force: true });
+  } catch (err) {
+    // 旧 bak 清不掉（杀软锁住）：继续换位会把旧 cli move 进残留 bak 形成嵌套坏布局
+    throw new SdkvmError(`cannot clear the stale ${bak}: ${(err as Error).message}`, {
+      hint: 'Usually a transient antivirus/indexer lock. Retry in a moment; cli.next was left for the retry.',
+    });
+  }
+  if (fs.existsSync(cli)) await renameWithRetry(cli, bak);
+  try {
+    await renameWithRetry(unpacked, cli);
   } catch (err) {
     if (fs.existsSync(bak) && !fs.existsSync(cli)) {
       try {
-        fs.renameSync(bak, cli);
+        await renameWithRetry(bak, cli);
       } catch {
         // 回滚失败时保留 bak，交给外层错误信息
       }
     }
-    fs.rmSync(staging, { recursive: true, force: true });
+    try {
+      fs.rmSync(staging, { recursive: true, force: true });
+    } catch {
+      // 残留无害：下次升级 prepareCliPackage 会先清
+    }
     throw err;
   }
-  fs.rmSync(bak, { recursive: true, force: true });
-  fs.rmSync(staging, { recursive: true, force: true });
+  try {
+    fs.rmSync(bak, { recursive: true, force: true });
+  } catch (err) {
+    log.warn(`could not remove the old CLI backup ${bak}: ${(err as Error).message}`);
+  }
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // 残留无害：下次升级 prepareCliPackage 会先清
+  }
 }
 
 /** 读 cli.next/package 里解压出的版本号（读不到返回 null，调用方跳过短路判断） */
@@ -152,8 +172,18 @@ export function windowsUpgradeScript(): string {
     'for %%i in ("%~dp0.") do set "HOME=%%~fi"',
     'rem 等本进程退出。ping 在 stdin 被重定向时也能当 sleep 用；timeout 命令会立刻报错',
     'ping -n 3 127.0.0.1 >nul',
-    'if exist "%HOME%\\cli.bak" rmdir /s /q "%HOME%\\cli.bak"',
+    // 旧 bak 清不掉就中止：move /y 到已存在的目录会把 cli 嵌套进 bak（cmd 语义），
+    // 产出 cli.bak\\cli\\... 的坏布局。cli.next 保留，重试时脚本会重来
+    'if not exist "%HOME%\\cli.bak" goto :nobak',
+    'rmdir /s /q "%HOME%\\cli.bak"',
+    'if exist "%HOME%\\cli.bak" (',
+    '  echo sdkvm: cannot clear stale cli.bak (antivirus lock?); upgrade aborted 1>&2',
+    '  echo rollbackfail>"%HOME%\\upgrade-apply.status"',
+    '  exit /b 1',
+    ')',
+    ':nobak',
     'set "MOVED=0"',
+    'set "SWAP=0"',
     'if not exist "%HOME%\\cli" goto :swap',
     'move /y "%HOME%\\cli" "%HOME%\\cli.bak" >nul && set "MOVED=1"',
     'if "%MOVED%"=="0" (',
@@ -166,24 +196,31 @@ export function windowsUpgradeScript(): string {
     'if "%MOVED%"=="0" goto :rollback',
     'if exist "%HOME%\\cli" goto :rollback',
     ':swap',
+    'set "SWAP=1"',
     'move /y "%HOME%\\cli.next\\package" "%HOME%\\cli" >nul || goto :rollback',
     'if not exist "%HOME%\\cli\\package.json" goto :rollback',
     'if exist "%HOME%\\cli.bak" rmdir /s /q "%HOME%\\cli.bak"',
     'if exist "%HOME%\\cli.next" rmdir /s /q "%HOME%\\cli.next"',
+    'echo ok>"%HOME%\\upgrade-apply.status"',
     'del "%~f0"',
     'exit /b 0',
-    // 回滚只在存在 bak 时清掉 cli：bak 不在说明换位从未开始，cli 是完好的旧版本
+    // 回滚只在存在 bak 时清掉 cli：bak 不在且换位未开始，cli 是完好的旧版本；
+    // 已进入换位且 cli 缺 package.json 的，是刚换上的坏新 cli，清掉别留任。
+    // cli.next（已验 SHA256 的载荷）保留给重试，回滚不再销毁它
     ':rollback',
     'if exist "%HOME%\\cli.bak" (',
     '  if exist "%HOME%\\cli" rmdir /s /q "%HOME%\\cli"',
     '  move /y "%HOME%\\cli.bak" "%HOME%\\cli" >nul || goto :rollbackfail',
+    ') else if "%SWAP%"=="1" if exist "%HOME%\\cli" if not exist "%HOME%\\cli\\package.json" (',
+    '  rmdir /s /q "%HOME%\\cli"',
     ')',
-    'if exist "%HOME%\\cli.next" rmdir /s /q "%HOME%\\cli.next"',
+    'echo rollback>"%HOME%\\upgrade-apply.status"',
     'del "%~f0"',
     'exit /b 1',
     // 回滚的 move 也失败：保留 bak 给用户手工换回，脚本留在盘上（不再自删）以便重试
     ':rollbackfail',
     'echo sdkvm: upgrade rollback failed; kept "%HOME%\\cli.bak" - rename it to cli manually 1>&2',
+    'echo rollbackfail>"%HOME%\\upgrade-apply.status"',
     'exit /b 2',
     '',
   ].join('\r\n');
@@ -211,6 +248,19 @@ export async function upgradeCommand(): Promise<void> {
     log.info('this install came from npm; upgrade with: npm update -g sdkvm');
     log.info('or: pnpm update -g sdkvm / yarn global upgrade sdkvm / bun update -g sdkvm');
     return;
+  }
+
+  // 上一次"计划式升级"（Windows）的结局写在本文件里：脚本退出码没人收，
+  // 不读它的话失败完全无声，用户只看到版本没变。读一次即焚，本次升级即重试
+  const statusFile = path.join(sdkvmHome(), 'upgrade-apply.status');
+  try {
+    const prev = fs.readFileSync(statusFile, 'utf8').trim();
+    fs.rmSync(statusFile, { force: true });
+    if (prev === 'rollback' || prev === 'rollbackfail') {
+      log.warn('the previous scheduled upgrade did not complete (it rolled back); retrying it now');
+    }
+  } catch {
+    // 无状态文件：上次升级成功或从未计划过
   }
 
   await withLock(async () => {
@@ -251,13 +301,19 @@ export async function upgradeCommand(): Promise<void> {
         );
         return;
       }
-      swapCliPackage(staged, home);
+      await swapCliPackage(staged, home);
       const after = getVersion();
       log.ok(
         `upgraded CLI ${before} → ${after} in ${path.join(home, 'cli')}; runtime and installed SDKs were left in place`,
       );
     } finally {
-      fs.rmSync(dest, { force: true });
+      // swap 已完成时缓存删除失败绝不能把成功升级报成失败；下载/校验失败时也只
+      // 降级为警告，不覆盖原始错误（install.ts 的 finally 同款语义）
+      try {
+        fs.rmSync(dest, { force: true });
+      } catch (err) {
+        log.warn(`could not remove the downloaded cache file ${dest}: ${(err as Error).message}`);
+      }
     }
   });
 }

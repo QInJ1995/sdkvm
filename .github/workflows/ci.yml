@@ -77,8 +77,13 @@ jobs:
         run: |
           test -x "$HOME/.sdkvm/current-java/bin/java"
           "$HOME/.sdkvm/current-java/bin/java" -version
-          grep -q 'sdkvm java init' "$HOME/.bashrc"
-          grep -q 'JAVA_HOME="$HOME/.sdkvm/current-java"' "$HOME/.bashrc"
+          # CLI 在 macOS+bash 下写 ~/.bash_profile（与 detectRcFile 一致），Linux 写 ~/.bashrc
+          case "$(uname -s)" in
+            Darwin) RC="$HOME/.bash_profile" ;;
+            *) RC="$HOME/.bashrc" ;;
+          esac
+          grep -q 'sdkvm java init' "$RC"
+          grep -q 'JAVA_HOME="$HOME/.sdkvm/current-java"' "$RC"
 
       - name: uninstall keeps other versions
         run: |
@@ -96,8 +101,12 @@ jobs:
         run: |
           test -x "$HOME/.sdkvm/current-node/bin/node"
           "$HOME/.sdkvm/current-node/bin/node" --version
-          grep -q 'sdkvm node init' "$HOME/.bashrc"
-          grep -q 'NODE_HOME="$HOME/.sdkvm/current-node"' "$HOME/.bashrc"
+          case "$(uname -s)" in
+            Darwin) RC="$HOME/.bash_profile" ;;
+            *) RC="$HOME/.bashrc" ;;
+          esac
+          grep -q 'sdkvm node init' "$RC"
+          grep -q 'NODE_HOME="$HOME/.sdkvm/current-node"' "$RC"
 
       - name: node junction + registry (windows)
         if: runner.os == 'Windows'
@@ -142,8 +151,12 @@ jobs:
         run: |
           test -x "$HOME/.sdkvm/current-go/bin/go"
           "$HOME/.sdkvm/current-go/bin/go" version
-          grep -q 'sdkvm go init' "$HOME/.bashrc"
-          grep -q 'GO_HOME="$HOME/.sdkvm/current-go"' "$HOME/.bashrc"
+          case "$(uname -s)" in
+            Darwin) RC="$HOME/.bash_profile" ;;
+            *) RC="$HOME/.bashrc" ;;
+          esac
+          grep -q 'sdkvm go init' "$RC"
+          grep -q 'GO_HOME="$HOME/.sdkvm/current-go"' "$RC"
 
       - name: go junction + registry (windows)
         if: runner.os == 'Windows'

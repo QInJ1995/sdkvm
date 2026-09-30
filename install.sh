@@ -11,6 +11,13 @@ ROOT="${SDKVM_HOME:-$HOME/.sdkvm}"
 BIN_DIR="$ROOT/bin"
 NODE_DIST="${NODE_DIST%/}"
 RELEASE_BASE="${RELEASE_BASE%/}"
+# 控制字符（换行等）会写进损坏的 shim 与 rc 标记块，提前拒绝（install.ps1 同款检查）
+case "$ROOT" in
+  *[![:print:]]*)
+    echo "sdkvm: SDKVM_HOME contains control characters; use a printable path" >&2
+    exit 1
+    ;;
+esac
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -27,10 +34,25 @@ node_archive="${node_name}.tar.gz"
 tmpdir=$(mktemp -d)
 
 # 与 CLI（lock.ts）兼容的全局锁：同一 $ROOT/.lock 目录、同样 info.json{pid}。
-# 持有者活着就等（有界 60 秒）；pid 已死或目录 5 分钟没心跳则按 stale 偷掉——
-# 并发的 install.sh 不会互相写坏 runtime/cli，`sdkvm upgrade` 也不会撞车 cli.next
+# 持有者活着就等（有界 60 秒）；pid 已死立即偷（不等 mtime，与 lock.ts 对齐），
+# 目录超 5 分钟无心跳也偷——并发的 install.sh 不会互相写坏 runtime/cli，
+# `sdkvm upgrade` 也不会撞车 cli.next
 LOCK_HELD=0
+LOCK_HEARTBEAT_PID=
+lock_owner_alive() {
+  [ -n "$1" ] && kill -0 "$1" 2>/dev/null
+}
+# 偷锁必须原子（lock.ts stealLock 同款）：先 rename 成自己的暂存名再删。
+# 直接 rm -rf + mkdir 的话，两个等待者可以先后删掉彼此刚建的新锁（双持锁）
+lock_steal() {
+  if mv "$ROOT/.lock" "$ROOT/.lock.stale-$$" 2>/dev/null; then
+    rm -rf "$ROOT/.lock.stale-$$"
+  fi
+}
 lock_acquire() {
+  # 全新机器 $ROOT 不存在时 mkdir .lock 会因父目录缺失失败，随后读 info 的
+  # sed 退出码 2 会把 set -e 的整个脚本无声杀掉——先建根目录
+  mkdir -p "$ROOT"
   tries=0
   while :; do
     if mkdir "$ROOT/.lock" 2>/dev/null; then
@@ -38,11 +60,15 @@ lock_acquire() {
       LOCK_HELD=1
       return 0
     fi
-    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null)
-    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
+    if lock_owner_alive "$holder"; then
       : # 持有者活着：等
+    elif [ -n "$holder" ]; then
+      # pid 已死：不等 mtime，立即偷（OOM-kill/断电后 5 分钟内也放行安装）
+      lock_steal
     elif [ -z "$(find "$ROOT/.lock" -prune -mmin -5 2>/dev/null)" ]; then
-      rm -rf "$ROOT/.lock" && continue # stale：偷锁后重试 mkdir
+      # info.json 缺失且目录超 5 分钟无变动：创建者死在 mkdir 与写 info 之间的无主锁
+      lock_steal
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 60 ]; then
@@ -52,14 +78,37 @@ lock_acquire() {
     sleep 1
   done
 }
+# 只删自己的锁：持锁超过 5 分钟时 CLI 可能已按 stale 把它偷走并转手，
+# 无条件 rm -rf 会删掉新持有者的锁
 lock_release() {
   if [ "$LOCK_HELD" = 1 ]; then
-    rm -rf "$ROOT/.lock" 2>/dev/null || :
+    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
+    if [ "$holder" = "$$" ]; then
+      rm -rf "$ROOT/.lock" 2>/dev/null || :
+    fi
     LOCK_HELD=0
   fi
 }
+# 持锁期间刷新目录 mtime：慢盘/NAS/杀毒扫描让临界区超过 5 分钟时，
+# 锁不会被 CLI 按 stale 偷走。子进程里 $$ 仍是主 shell 的 pid
+lock_start_heartbeat() {
+  (
+    while :; do
+      sleep 60
+      holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
+      [ "$holder" = "$$" ] || break
+      touch "$ROOT/.lock" 2>/dev/null || break
+    done
+  ) &
+  LOCK_HEARTBEAT_PID=$!
+}
+lock_stop_heartbeat() {
+  [ -n "$LOCK_HEARTBEAT_PID" ] && kill "$LOCK_HEARTBEAT_PID" 2>/dev/null || :
+  LOCK_HEARTBEAT_PID=
+}
 
 cleanup() {
+  lock_stop_heartbeat
   rm -rf "$tmpdir" 2>/dev/null || :
   lock_release
 }
@@ -141,6 +190,7 @@ if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
 fi
 
 lock_acquire
+lock_start_heartbeat
 
 mkdir -p "$ROOT/runtime" "$BIN_DIR"
 # runtime 先解压到 runtime.next 校验再挪进位：直接解压进 runtime/ 中途失败

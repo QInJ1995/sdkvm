@@ -57,7 +57,7 @@ describe('downloadFile 长度校验', () => {
     await expect(downloadFile('https://example.com/c.zip', dest)).rejects.toThrow(
       /Download incomplete: 5\/11 bytes/,
     );
-    expect(existsSync(`${dest}.part`)).toBe(false);
+    expect(existsSync(`${dest}.tmp-${process.pid}.part`)).toBe(false);
   });
 
   it('响应中途断开时销毁写流，不把 ERR_STREAM_DESTROYED 变成未处理错误', async () => {
@@ -99,7 +99,7 @@ describe('downloadFile 长度校验', () => {
     await expect(downloadFile('https://example.com/flutter.zip', dest)).rejects.toThrow(
       /Download failed after \d+ bytes: connection reset/,
     );
-    expect(existsSync(`${dest}.part`)).toBe(false);
+    expect(existsSync(`${dest}.tmp-${process.pid}.part`)).toBe(false);
   });
 
   it('写流在 drain 之前出错时失败，而不是一直等 drain', async () => {
@@ -121,7 +121,7 @@ describe('downloadFile 长度校验', () => {
 
     const dest = path.join(dir, 'stuck.zip');
     await expect(downloadFile('https://example.com/stuck.zip', dest)).rejects.toThrow(/disk full/);
-    expect(existsSync(`${dest}.part`)).toBe(false);
+    expect(existsSync(`${dest}.tmp-${process.pid}.part`)).toBe(false);
   });
 
   it('写流一直不 drain 时，空闲超时会结束等待', async () => {

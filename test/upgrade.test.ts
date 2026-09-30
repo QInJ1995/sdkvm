@@ -92,11 +92,35 @@ describe('windowsUpgradeScript', () => {
     // 第一步 move 重试后仍失败（cli 未移走）绝不把 package move 进现存的 cli
     expect(body).toContain('if "%MOVED%"=="0" goto :rollback');
     expect(body).toContain('if exist "%HOME%\\cli" goto :rollback');
-    // 成功路径（rollback 标签之前）才清理 bak 与 cli.next；
-    // indexOf 会先命中 goto :rollback 那行（在 package.json 门槛之前），必须取标签本身
-    const rollbackAt = body.lastIndexOf(':rollback');
+    // 成功路径（rollback 标签之前）才清理 bak 与 cli.next。必须锚定标签行本身：
+    // lastIndexOf(':rollback') 会先命中同前缀的 :rollbackfail 标签，把整个回滚段
+    // 误算进"成功路径"，断言弱化成摆设
+    const rollbackAt = body.indexOf('\n:rollback\r\n');
+    expect(rollbackAt).toBeGreaterThan(0);
     const successBlock = body.slice(0, rollbackAt);
     expect(successBlock).toMatch(/package\.json[\s\S]*rmdir \/s \/q "%HOME%\\cli\.bak"/);
+  });
+
+  it('rollback keeps the verified cli.next payload and records its outcome', () => {
+    const body = windowsUpgradeScript();
+    const rollbackAt = body.indexOf('\n:rollback\r\n');
+    const failAt = body.indexOf('\n:rollbackfail\r\n');
+    expect(rollbackAt).toBeGreaterThan(0);
+    expect(failAt).toBeGreaterThan(rollbackAt);
+    const rollbackBlock = body.slice(rollbackAt, failAt);
+    // 回滚不销毁已验 SHA256 的载荷：cli.next 留在盘上，重试时 prepareCliPackage 重建
+    expect(rollbackBlock).not.toContain('cli.next');
+    // 退出码没人收：结局写进状态文件，下次 upgrade 读到即向用户报告/重试
+    expect(rollbackBlock).toContain('echo rollback>"%HOME%\\upgrade-apply.status"');
+    expect(body).toContain('echo ok>"%HOME%\\upgrade-apply.status"');
+    expect(body.slice(failAt)).toContain('echo rollbackfail>"%HOME%\\upgrade-apply.status"');
+  });
+
+  it('aborts instead of nesting when the stale cli.bak cannot be cleared', () => {
+    const body = windowsUpgradeScript();
+    // move /y 到已存在的目录会把 cli 嵌套进 bak：清不掉旧 bak 必须中止而非继续
+    const m = /rmdir \/s \/q "%HOME%\\cli\.bak"\r?\nif exist "%HOME%\\cli\.bak"/.exec(body);
+    expect(m).not.toBeNull();
   });
 
   it('keeps the script on disk when rollback itself fails', () => {

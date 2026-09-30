@@ -196,3 +196,64 @@ describe('lock', () => {
     expect(isProcessAlive(999999)).toBe(false);
   });
 });
+
+describe('acquireLock 异常路径', () => {
+  it('rolls back the fresh lock dir when writeLockInfo fails (no orphan wedge)', async () => {
+    const { acquireLock } = await freshLock();
+    const orig = fs.writeFileSync.bind(fs) as (...args: unknown[]) => void;
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
+      const file = String(args[0]);
+      if (file.includes('.lock') && file.includes('.tmp-')) {
+        const err = new Error('ENOSPC: no space left on device, write') as NodeJS.ErrnoException;
+        err.code = 'ENOSPC';
+        throw err;
+      }
+      return orig(...args);
+    });
+    expect(() => acquireLock()).toThrow(/ENOSPC/);
+    spy.mockRestore();
+    // 无 pid、mtime 新鲜的锁目录会把本机楔到 STALE_MS：回滚后应立即可重取
+    expect(fs.existsSync(path.join(home, '.lock'))).toBe(false);
+    expect(() => acquireLock()).not.toThrow();
+  });
+
+  it('steals an orphan lock (no info.json) past the short grace, not STALE_MS', async () => {
+    const { acquireLock } = await freshLock();
+    const dir = path.join(home, '.lock');
+    fs.mkdirSync(dir);
+    const old = new Date(Date.now() - 10_000);
+    fs.utimesSync(dir, old, old);
+    expect(() => acquireLock()).not.toThrow();
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'info.json'), 'utf8')).pid).toBe(process.pid);
+  });
+
+  it('a fresh orphan lock is still respected (grace window)', async () => {
+    const { acquireLock } = await freshLock();
+    fs.mkdirSync(path.join(home, '.lock'));
+    expect(() => acquireLock()).toThrow(/in progress/);
+  });
+});
+
+describe('releaseLock 遗留清理', () => {
+  it('removes own-pid staging left by a stealer instead of letting it come back as an orphan', async () => {
+    const { acquireLock, releaseLock } = await freshLock();
+    acquireLock();
+    // 模拟偷锁者把我们（仍活着）的锁目录挪进了它的暂存名
+    const staging = path.join(home, `.lock.rel-${process.pid + 1}`);
+    fs.renameSync(path.join(home, '.lock'), staging);
+    expect(() => releaseLock()).not.toThrow();
+    expect(fs.existsSync(staging)).toBe(false);
+    expect(fs.existsSync(path.join(home, '.lock'))).toBe(false);
+  });
+
+  it('claims and deletes a restored lock that still carries our pid', async () => {
+    const { acquireLock, releaseLock } = await freshLock();
+    acquireLock();
+    const staging = path.join(home, `.lock.rel-${process.pid + 1}`);
+    fs.renameSync(path.join(home, '.lock'), staging);
+    // 偷锁者把它"还回"了：内容还是本进程的 pid，认领删除
+    fs.renameSync(staging, path.join(home, '.lock'));
+    expect(() => releaseLock()).not.toThrow();
+    expect(fs.existsSync(path.join(home, '.lock'))).toBe(false);
+  });
+});

@@ -144,6 +144,11 @@ function sweepStaleStaging(lockDir: string): void {
   }
 }
 
+/** mkdir 与 info.json 落盘之间被 SIGKILL 的无主锁：合法持有者的 info.json 在建目录后
+ *  毫秒级出现（tmp+rename 原子写），等这几秒还不出现就是创建者已死，别按
+ *  "holder 未知"一路忙等满 STALE_MS */
+const ORPHAN_GRACE_MS = 5_000;
+
 /** 本进程持有的锁深度：updateConfig 等嵌套调用不再自锁死（原先第二层 acquire 会抛
  *  "Another sdkvm operation is in progress"并提示自己删锁） */
 let heldDepth = 0;
@@ -162,7 +167,18 @@ export function acquireLock(): void {
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
-      writeLockInfo(Date.now());
+      try {
+        writeLockInfo(Date.now());
+      } catch (err) {
+        // 刚建出的目录写不进 info.json（磁盘满/杀软拦截新目录）：回滚删掉，
+        // 否则留下一个无 pid、mtime 新鲜的锁目录，把本机所有操作楔到 STALE_MS
+        try {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // 删不掉只能留给 stale 兜底（与被 SIGKILL 的窗口同款下场）
+        }
+        throw err;
+      }
       sweepStaleStaging(lockDir);
       heldDepth = 1;
       return;
@@ -172,8 +188,11 @@ export function acquireLock(): void {
       const holder = readLockPid();
       let stale = holder != null && !isProcessAlive(holder);
       if (!stale) {
+        // holder 存活：等满 STALE_MS；holder 未知（info.json 缺失＝创建者死在
+        // 建目录与写 info 之间）：无主锁只等短宽限期，别把本机楔满 5 分钟
+        const limit = holder == null ? ORPHAN_GRACE_MS : STALE_MS;
         try {
-          stale = Date.now() - fs.statSync(lockDir).mtimeMs > STALE_MS;
+          stale = Date.now() - fs.statSync(lockDir).mtimeMs > limit;
         } catch {
           stale = true; // 锁目录恰好消失（持有者刚释放或已被清走）：直接重取
         }
@@ -216,7 +235,8 @@ export function releaseLock(): void {
   try {
     fs.renameSync(lockDir, staging);
   } catch {
-    return; // 锁已不在（被偷走/已释放）：无事可做
+    releaseAbandonedLock(lockDir, staging);
+    return;
   }
   const owner = readRelPid(staging);
   if (owner !== process.pid) {
@@ -232,6 +252,55 @@ export function releaseLock(): void {
     fs.rmSync(staging, { recursive: true, force: true });
   } catch {
     // 残留由 sweepStaleStaging 按 .rel- 前缀兜底清理
+  }
+}
+
+/** 自己的锁目录已被偷锁者挪走时的收尾：偷锁者读到 pid≠自己会把目录"还回"，
+ *  但本进程已放弃持有，还回来的会是一把无主锁（把后来的操作楔到 mtime 过期）。
+ *  清掉所有写着本 pid 的遗留 staging，让对方的"还回"扑空；.lock 若已被还回
+ *  且内容仍是本 pid，认领后删除 */
+function releaseAbandonedLock(lockDir: string, staging: string): void {
+  const root = paths.root();
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return;
+  }
+  const base = path.basename(lockDir);
+  for (const name of names) {
+    if (!name.startsWith(`${base}.rel-`) && !name.startsWith(`${base}.stale-`)) continue;
+    const dir = path.join(root, name);
+    // 写着本 pid 的 staging：要么是偷锁者手里的本进程旧锁（内容已无价值），
+    // 要么是本进程自己历史释放的残留——都可以删
+    if (readRelPid(dir) === process.pid) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // 清不掉由 sweepStaleStaging 兜底
+      }
+    }
+  }
+  // "还回"已发生且内容仍是本 pid：认领删除（认领瞬间又易主则还回，同主流程语义）
+  try {
+    if (readLockPid() !== process.pid) return;
+    fs.renameSync(lockDir, staging);
+  } catch {
+    return;
+  }
+  const owner = readRelPid(staging);
+  if (owner !== process.pid) {
+    try {
+      fs.renameSync(staging, lockDir);
+    } catch {
+      // sweep 兜底
+    }
+    return;
+  }
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // sweep 兜底
   }
 }
 

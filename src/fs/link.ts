@@ -41,8 +41,16 @@ export function setCurrent(type: SdkTypeId, target: string, platform: Platform):
     try {
       fs.renameSync(link, aside);
       hadOld = true;
-    } catch {
-      // 不存在（首次 use）
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // ENOENT：链接不存在（首次 use）。其它失败（EPERM/EBUSY——杀软或索引器
+      // 短暂占用 junction）不能当首次处理：随后 symlinkSync 撞同名残留会报出
+      // 误导性的错误，且掩盖真实的占用问题
+      if (code !== 'ENOENT') {
+        throw new SdkvmError(`Failed to move the old link ${link} aside: ${(err as Error).message}`, {
+          hint: 'Usually a transient lock by antivirus or a search indexer. Wait a few seconds and retry; the link was left unchanged.',
+        });
+      }
     }
     try {
       fs.symlinkSync(target, link, 'junction');

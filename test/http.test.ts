@@ -90,3 +90,76 @@ describe('body 读取重试', () => {
     expect(String((err as SdkvmError).hint)).toMatch(/ECONNREFUSED/);
   });
 });
+
+describe('可重试状态码分类', () => {
+  it('502 重试后成功', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        return calls === 1 ? new Response('bad gateway', { status: 502 }) : new Response('ok');
+      }),
+    );
+    await expect(httpText('https://flaky.example/x')).resolves.toBe('ok');
+    expect(calls).toBe(2);
+  });
+
+  it('501 是永久性错误：立即上抛不重试', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        return new Response('not implemented', { status: 501 });
+      }),
+    );
+    await expect(httpText('https://perm.example/x')).rejects.toThrow(/501/);
+    expect(calls).toBe(1);
+  });
+
+  it('429 尊重 Retry-After 后成功', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response('slow down', { status: 429, headers: { 'retry-after': '1' } });
+        }
+        return new Response('ok');
+      }),
+    );
+    await expect(httpText('https://limited.example/x')).resolves.toBe('ok');
+    expect(calls).toBe(2);
+  });
+});
+
+describe('显式代理环境变量走 undici per-request dispatcher', () => {
+  it('routes through undici fetch with a dispatcher and leaves global fetch alone', async () => {
+    const dispatchers: unknown[] = [];
+    vi.doMock('undici', async (importOriginal) => {
+      const orig = await importOriginal<typeof import('undici')>();
+      return {
+        ...orig,
+        fetch: vi.fn(async (_url: string, init?: { dispatcher?: unknown }) => {
+          dispatchers.push(init?.dispatcher);
+          return new Response('via-proxy');
+        }),
+      };
+    });
+    vi.resetModules();
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:7899';
+    try {
+      // 动态 import 拿到挂着 undici mock 的新模块实例（proxyAgent 单例也随之重置）
+      const { httpText: freshHttpText } = await import('../src/net/http.js');
+      await expect(freshHttpText('https://behind-proxy.example/x')).resolves.toBe('via-proxy');
+      expect(dispatchers.length).toBe(1);
+      expect(dispatchers[0]).toBeTruthy();
+    } finally {
+      delete process.env.HTTPS_PROXY;
+      vi.doUnmock('undici');
+      vi.resetModules();
+    }
+  });
+});

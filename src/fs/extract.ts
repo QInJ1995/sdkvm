@@ -47,12 +47,16 @@ export async function extractArchive(
   fs.mkdirSync(destDir, { recursive: true });
 
   if (platform.os === 'windows') {
-    // Win10 1803+ 自带 bsdtar（支持 zip 与 tar），失败回退 Expand-Archive
+    // Win10 1803+ 自带 bsdtar（支持 zip 与 tar）；zip 解压失败（坏归档/杀软拦截）
+    // 回退 Expand-Archive——tar.gz/xz 没有第二条路，失败原样上抛
     if (fs.existsSync(WIN_TAR)) {
-      await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
-      return;
-    }
-    if (archiveType !== 'zip') {
+      try {
+        await run(WIN_TAR, ['-xf', archiveFile, '-C', destDir], { timeoutMs: EXTRACT_TIMEOUT_MS });
+        return;
+      } catch (err) {
+        if (archiveType !== 'zip') throw err;
+      }
+    } else if (archiveType !== 'zip') {
       // Expand-Archive 只认 zip：对着 tar.gz 只会报一串难懂的 PS 错误
       throw new SdkvmError(`No tar.exe on this Windows; cannot extract ${archiveType} without it`, {
         hint: `Restore ${WIN_TAR} (Windows 10 1803+ ships it) or extract manually: ${archiveFile}`,

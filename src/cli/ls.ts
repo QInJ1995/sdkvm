@@ -57,10 +57,15 @@ async function listRemote(type: SdkTypeId, opts: { vendor?: string }): Promise<v
   }
 
   for (const sec of sections) {
-    if (!sec || sec.lines.length === 0) continue;
+    if (!sec) continue;
     const { vendor, lines } = sec;
     log.raw('');
     log.raw(`# ${vendor.label}`);
+    if (lines.length === 0) {
+      // 整段静默省略会让"列出来了却零行"无法与漏列区分（linux/aarch64 的 Flutter 就是这样）
+      log.raw('  # no version lines for this platform');
+      continue;
+    }
     const width = Math.max(...lines.map((m) => `${vendor.id}-${m.key}`.length)) + 2;
     const MAX_LINES = 12;
     const shown = lines.slice(0, MAX_LINES);

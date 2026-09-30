@@ -251,3 +251,11 @@ describe.skipIf(process.platform === 'win32')('currentSdk 路径拼写归一', (
     expect(currentSdk('java')).toBeNull();
   });
 });
+
+  it('corretto 8 补零目录可被未补零输入命中（数值段归一）', () => {
+    // 安装侧 canonical 化 8.504.01.1（patch 补零）；用户按原样 8.504.1.1 重输也应命中
+    mkJdk('corretto-8.504.01.1');
+    expect(findInstalled('java', 'corretto-8.504.1.1').dirPath.endsWith('corretto-8.504.01.1')).toBe(true);
+    // 数值不同仍不能命中
+    expect(() => findInstalled('java', 'corretto-8.504.2.1')).toThrow(/matches/);
+  });

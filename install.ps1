@@ -76,6 +76,75 @@ function Remove-Junction([string]$path) {
   }
 }
 
+# 与 CLI（lock.ts）/install.sh 兼容的全局锁：同一 $Root\.lock 目录、同样 info.json{pid}。
+# 持有者活着就等（有界 60 秒）；pid 已死立即偷（先 rename 暂存再删，原子——直接
+# Remove+New 的话两个等待者会先后删掉彼此的新锁）；无 info 的目录超 5 分钟也偷。
+# 没有它，本脚本与 `sdkvm upgrade` / 第二个安装会并发互写 runtime\ 与 cli\
+$script:LockHeld = $false
+$lockDir = Join-Path $Root '.lock'
+
+function Read-LockHolder {
+  try {
+    $info = Get-Content -LiteralPath (Join-Path $lockDir 'info.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($info.pid -is [int]) { return [int]$info.pid }
+  } catch {}
+  return 0
+}
+
+# 慢盘/杀毒扫描拖长临界区时续命，避免被 CLI 按 5 分钟无心跳偷走
+function Touch-Lock {
+  if (-not $script:LockHeld) { return }
+  if ((Read-LockHolder) -ne $PID) { return }
+  try { (Get-Item -LiteralPath $lockDir -Force).LastWriteTimeUtc = [DateTime]::UtcNow } catch {}
+}
+
+function Lock-Acquire {
+  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  for ($i = 0; $i -lt 60; $i++) {
+    $created = $false
+    try {
+      New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
+      $created = $true
+      Set-Content -LiteralPath (Join-Path $lockDir 'info.json') -Encoding ascii -Value ('{"pid":' + $PID + ',"startedAt":' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + '}')
+    } catch {
+      if ($created) { throw }
+    }
+    if ($created) { $script:LockHeld = $true; return }
+    $holder = Read-LockHolder
+    $alive = $false
+    if ($holder -gt 0) {
+      try { Get-Process -Id $holder -ErrorAction Stop | Out-Null; $alive = $true } catch {}
+    }
+    if (-not $alive) {
+      $orphanStale = $false
+      if ($holder -eq 0) {
+        try {
+          $orphanStale = ((Get-Item -LiteralPath $lockDir -Force).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-5))
+        } catch {}
+      }
+      if ($holder -gt 0 -or $orphanStale) {
+        $staging = "$lockDir.stale-$PID"
+        try {
+          Move-Item -LiteralPath $lockDir -Destination $staging -ErrorAction Stop
+          Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+          continue
+        } catch {}
+      }
+    }
+    Start-Sleep -Seconds 1
+  }
+  throw "another sdkvm operation holds $lockDir; retry in a moment"
+}
+
+function Lock-Release {
+  if (-not $script:LockHeld) { return }
+  # 只删自己的锁：临界区超过 5 分钟时 CLI 可能已按 stale 偷走转手，无条件删会误删新持有者
+  if ((Read-LockHolder) -eq $PID) {
+    Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue
+  }
+  $script:LockHeld = $false
+}
+
 try {
   Write-Host "sdkvm: downloading Node.js $RuntimeNode (windows/$arch)"
   Get-Url "$NodeDist/v$RuntimeNode/$nodeArchive" (Join-Path $tmpdir $nodeArchive)
@@ -95,6 +164,9 @@ try {
   $actual = Get-FileSha256 (Join-Path $tmpdir 'sdkvm.tgz')
   if (-not $expected -or $expected -ne $actual) { throw 'sdkvm: CLI checksum mismatch' }
 
+  # 下载/校验都在锁外（只写 tmpdir），从这里开始改 $Root 才持锁
+  Lock-Acquire
+
   New-Item -ItemType Directory -Force -Path (Join-Path $Root 'runtime'), $BinDir | Out-Null
   $runtimeDir = Join-Path $Root 'runtime'
   if (Test-Path (Join-Path $runtimeDir $nodeName)) { Remove-Item -Recurse -Force (Join-Path $runtimeDir $nodeName) }
@@ -109,6 +181,7 @@ try {
   }
   Remove-Junction $current
   New-Item -ItemType Junction -Path $current -Target (Join-Path $runtimeDir $nodeName) | Out-Null
+  Touch-Lock
 
   # Atomic CLI replace: extract + validate, then rename; restore bak on failure
   $staging = Join-Path $Root 'cli.next'
@@ -134,9 +207,11 @@ try {
   }
   if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
   if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
-  # 上次升级留下的应用脚本（升级成功后本应自删）：不清掉会一直躺在根目录
+  # 上次升级留下的应用脚本（升级成功后本应自删）：不清掉会一直躺在根目录。
+  # 在锁内删：与 upgrade 的换位互斥；正在等进程退出的已调度脚本由 cmd 自行失败
   $applyScript = Join-Path $Root 'upgrade-apply.cmd'
   if (Test-Path $applyScript) { Remove-Item -Force $applyScript }
+  Touch-Lock
 
   # shim 运行时用 %~dp0 推导根路径，不内嵌安装路径：非 ASCII 用户名不会被 ascii 编码损坏
   @"
@@ -192,4 +267,5 @@ if defined SDKVM_HOME (
   $null = $native::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r)
 } finally {
   Remove-Item -Recurse -Force $tmpdir -ErrorAction SilentlyContinue
+  Lock-Release
 }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { detectPlatform } from '../core/platform.js';
+import { detectPlatform, type Platform } from '../core/platform.js';
 import { loadConfig } from '../core/config.js';
 import { withLock, isProcessAlive } from '../core/lock.js';
 import { listInstalled } from '../core/registry.js';
@@ -238,6 +238,28 @@ export function sweepStaleParts(): void {
   }
 }
 
+/** 安装目录内的架构戳：目录名不含 arch（`vendor-版本`），跨架构共享 SDKVM_HOME 时
+ *  （dotfiles 同步、Intel→Apple Silicon 迁移）同版本目录会被误判"已安装"，
+ *  current 指向的其实是另一架构的构建。旧安装没有戳：不拦截 */
+const ARCH_STAMP = '.sdkvm-arch';
+
+function writeArchStamp(finalDir: string, platform: Platform): void {
+  try {
+    fs.writeFileSync(path.join(finalDir, ARCH_STAMP), `${platform.os}-${platform.arch}\n`);
+  } catch {
+    // 写不上只影响下次的跨架构校验，不影响本次安装
+  }
+}
+
+function archStampMismatch(finalDir: string, platform: Platform): string | null {
+  try {
+    const recorded = fs.readFileSync(path.join(finalDir, ARCH_STAMP), 'utf8').trim();
+    return recorded && recorded !== `${platform.os}-${platform.arch}` ? recorded : null;
+  } catch {
+    return null;
+  }
+}
+
 /** tmp/ 残留（kill -9/断电留下的 extract-* 解压目录与安装期归档）清扫。
  *  归档/解压都在锁外进行且文件名带 pid：优先按 pid 存活判断——活跃进程的文件绝不动
  *  （大归档解压超过按龄阈值也不能误删），pid 已死则不论新旧立即清；
@@ -319,6 +341,15 @@ export async function installCommand(
   const hintVersion = installUseHint(type, artifact.version);
   const installerMode = artifact.archive === 'sh' || artifact.archive === 'exe';
   const reportAlreadyInstalled = (): void => {
+    const foreign = archStampMismatch(finalDir, platform);
+    if (foreign) {
+      throw new SdkvmError(
+        `${artifact.dirName} was installed for ${foreign}, not ${platform.os}/${platform.arch}`,
+        {
+          hint: `The install directory name does not carry the arch. Reinstall for this machine with --force.`,
+        },
+      );
+    }
     log.warn(`${artifact.displayName} is already installed`);
     // 与成功路径一致：`use <major>` 命中更新的已装版本时退回完整规格
     log.info(`run: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
@@ -427,7 +458,9 @@ export async function installCommand(
             fs.rmSync(bak, { recursive: true, force: true });
             writeIncompleteMarker(incomplete, existed, 'installer');
             if (existed) {
-              fs.renameSync(finalDir, bak);
+              // 换位的"旧目录"一半同样可能被杀软/索引器短暂锁住：它比新解压的
+              // 文件更大更老，更易被持有；瞬时失败重试，别作废整次下载
+              await renameWithRetry(finalDir, bak);
               moved = true;
             }
             log.info('running installer ...');
@@ -451,7 +484,7 @@ export async function installCommand(
             }
             if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
               try {
-                fs.renameSync(bak, finalDir);
+                await renameWithRetry(bak, finalDir);
               } catch {
                 // 回滚失败时保留 bak
               }
@@ -467,7 +500,7 @@ export async function installCommand(
             if (existed) {
               // 标记先于换位写入：finalDir 被改名移走后，只有它能证明 bak 的归属
               writeIncompleteMarker(incomplete, true, 'archive');
-              fs.renameSync(finalDir, bak);
+              await renameWithRetry(finalDir, bak);
               moved = true;
             }
             await renameWithRetry(preparedRoot, finalDir);
@@ -476,7 +509,7 @@ export async function installCommand(
           } catch (err) {
             if (moved && fs.existsSync(bak) && !fs.existsSync(finalDir)) {
               try {
-                fs.renameSync(bak, finalDir);
+                await renameWithRetry(bak, finalDir);
               } catch {
                 // 回滚失败时保留 bak
               }
@@ -486,6 +519,7 @@ export async function installCommand(
           }
         }
 
+        writeArchStamp(finalDir, platform);
         log.ok(`installed ${artifact.displayName} → ${finalDir}`);
         log.info(`switch to it: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
       },

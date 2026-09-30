@@ -7,7 +7,7 @@
 [![npm version](https://img.shields.io/npm/v/sdkvm)](https://www.npmjs.com/package/sdkvm)
 [![CI](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml/badge.svg)](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/sdkvm)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D18.15-green)](./package.json)
+[![node](https://img.shields.io/badge/node-%3E%3D18.17-green)](./package.json)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#requirements)
 
 [中文](./README.md) | English
@@ -106,7 +106,7 @@ Design goals:
 
 | Dependency | Version | Notes |
 | --- | --- | --- |
-| Node.js | >= 18.15 | Required for the npm install method. The install script ships an isolated runtime |
+| Node.js | >= 18.17 | Required for the npm install method. The install script ships an isolated runtime |
 | OS | — | macOS (Apple Silicon / Intel), mainstream Linux, Windows 10+ |
 | Extractor | built in | `tar` on macOS / Linux; Windows uses bsdtar, falling back to PowerShell `Expand-Archive` |
 
@@ -188,9 +188,9 @@ SDKVM_RELEASE_BASE=https://github.com/QInJ1995/sdkvm/releases \
 
 ### npm / pnpm / yarn / bun (alternative)
 
-Use this when Node.js >= 18.15 is already installed and you want the package
+Use this when Node.js >= 18.17 is already installed and you want the package
 manager to own global tools. The CLI follows the `node` on `PATH`; a Node older
-than 18.15 can stop the CLI from starting (`sdkvm node use 22` restores it).
+than 18.17 can stop the CLI from starting (`sdkvm node use 22` restores it).
 
 ```sh
 npm install -g sdkvm
@@ -976,7 +976,7 @@ Pass the full prerelease, for example `sdkvm flutter install 3.49.0-0.1.pre`.
 
 A script install launches the CLI with `~/.sdkvm/runtime`, so `sdkvm node use`
 does not affect it. An npm global install follows the `node` on `PATH`; a Node
-older than 18.15 can stop the CLI — `sdkvm node use 22` brings it back.
+older than 18.17 can stop the CLI — `sdkvm node use 22` brings it back.
 
 ### Difference between `mirror`, `nrm`, and `mrm`
 

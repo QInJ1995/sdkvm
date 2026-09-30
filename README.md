@@ -7,7 +7,7 @@
 [![npm version](https://img.shields.io/npm/v/sdkvm)](https://www.npmjs.com/package/sdkvm)
 [![CI](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml/badge.svg)](https://github.com/QInJ1995/sdkvm/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/sdkvm)](./LICENSE)
-[![node](https://img.shields.io/badge/node-%3E%3D18.15-green)](./package.json)
+[![node](https://img.shields.io/badge/node-%3E%3D18.17-green)](./package.json)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-blue)](#系统要求)
 
 中文 | [English](./README.en.md)
@@ -93,7 +93,7 @@
 
 | 依赖 | 版本 | 说明 |
 | --- | --- | --- |
-| Node.js | >= 18.15 | npm 安装方式需要。安装脚本自带隔离运行时,不要求预装 |
+| Node.js | >= 18.17 | npm 安装方式需要。安装脚本自带隔离运行时,不要求预装 |
 | 操作系统 | — | macOS(Apple Silicon / Intel)、主流 Linux、Windows 10+ |
 | 解压工具 | 系统自带 | macOS / Linux 使用 `tar`;Windows 使用 bsdtar,缺失时回退 PowerShell `Expand-Archive` |
 
@@ -168,8 +168,8 @@ SDKVM_RELEASE_BASE=https://github.com/QInJ1995/sdkvm/releases \
 
 ### npm / pnpm / yarn / bun(备选)
 
-适合本机已有 Node.js >= 18.15、并希望由包管理器统一维护全局工具的场景。
-CLI 依赖 `PATH` 上的 `node`;若之后切换到低于 18.15 的 Node,CLI 可能无法启动
+适合本机已有 Node.js >= 18.17、并希望由包管理器统一维护全局工具的场景。
+CLI 依赖 `PATH` 上的 `node`;若之后切换到低于 18.17 的 Node,CLI 可能无法启动
 (`sdkvm node use 22` 可恢复)。
 
 ```sh
@@ -878,7 +878,7 @@ fish_add_path $JAVA_HOME/bin $GO_HOME/bin $FLUTTER_HOME/bin $NODE_HOME/bin $MAVE
 ### CLI 会被自己管理的 Node 影响吗
 
 脚本安装用 `~/.sdkvm/runtime` 启动 CLI,`sdkvm node use` 不影响它。npm 全局
-安装跟随 `PATH` 上的 `node`;切到低于 18.15 的版本时 CLI 可能无法启动,
+安装跟随 `PATH` 上的 `node`;切到低于 18.17 的版本时 CLI 可能无法启动,
 `sdkvm node use 22` 可恢复。
 
 ### `mirror`、`nrm`、`mrm` 的区别

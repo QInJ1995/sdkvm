@@ -131,7 +131,11 @@ export const correttoVendor: Vendor = {
         const universe = await temurinVendor.listMajors();
         const ltsKeys = universe.filter((u) => u.lts).map((u) => Number(u.key));
         latestLts = ltsKeys.length > 0 ? Math.max(...ltsKeys) : Math.max(...LTS_MAJORS);
-      } catch {
+      } catch (err) {
+        // 与 listMajors 的降级口径一致：静默退回静态表会让滞后的 lts 装旧线且无提示
+        log.warn(
+          `could not fetch the Adoptium release-line index (${(err as Error).message}); lts falls back to the static table`,
+        );
         latestLts = Math.max(...LTS_MAJORS);
       }
       version = await resolveLatestVersion(latestLts, platform);

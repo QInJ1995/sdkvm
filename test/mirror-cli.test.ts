@@ -10,6 +10,7 @@ import {
   listMirrorSitesForType,
   matchMirrorSiteName,
   normalizeMirrorUrl,
+  parseMirrorRootUrl,
   siteVendorsForType,
 } from '../src/cli/mirror-presets.js';
 import { loadConfig } from '../src/core/config.js';
@@ -216,5 +217,23 @@ describe('mirrorCommand use / ls / current', () => {
   it('set site name without URL hints to use', () => {
     expect(() => mirrorCommand('go', 'set', 'nju', undefined)).toThrow(/mirror site name/);
     expect(() => mirrorCommand('go', 'unset', 'official', undefined)).toThrow(/mirror use official/);
+  });
+});
+
+describe('parseMirrorRootUrl 边界', () => {
+  it('rejects query strings and fragments, including trailing bare ? / #', () => {
+    // 结尾裸 `?`/`#` 在 URL 对象里 search/hash 为空串，判空拦不住但 href 原样保留
+    expect(() => parseMirrorRootUrl('https://mirrors.example.com/golang?')).toThrow(
+      /query string or fragment/,
+    );
+    expect(() => parseMirrorRootUrl('https://mirrors.example.com/golang#')).toThrow(
+      /query string or fragment/,
+    );
+    expect(() => parseMirrorRootUrl('https://mirrors.example.com/golang?a=1')).toThrow(
+      /query string or fragment/,
+    );
+    expect(parseMirrorRootUrl('https://mirrors.example.com/golang/')).toBe(
+      'https://mirrors.example.com/golang',
+    );
   });
 });

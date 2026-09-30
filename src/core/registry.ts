@@ -116,7 +116,14 @@ export function findInstalled(type: SdkTypeId, specInput: string, vendorArg?: st
       // 输入带 build 时上面四条已判定（命中或不同构建）——norm 会把 build 一并抹掉，
       // 不能让 "21.0.5+11" 的请求被匹配到 21.0.5+9 的安装上
       const norm = (s: string) => (s.split('+')[0] ?? s).replace(/(\.0)+$/, '');
-      return !v.includes('+') && norm(f) === norm(v);
+      // 数值段归一比较：corretto 8 的目录名补零（8.504.01.1），用户按未补零的
+      // 原样输入 use 也应命中；段数相同且逐段数值相等才算同名
+      const numericEq = (a: string, b: string): boolean => {
+        const as = (a.split('+')[0] ?? a).split('.');
+        const bs = (b.split('+')[0] ?? b).split('.');
+        return as.length === bs.length && as.every((seg, i) => /^\d+$/.test(seg) && Number(seg) === Number(bs[i]));
+      };
+      return !v.includes('+') && (norm(f) === norm(v) || numericEq(f, v));
     });
   }
 

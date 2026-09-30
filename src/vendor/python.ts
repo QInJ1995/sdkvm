@@ -244,6 +244,14 @@ export const cpythonVendor: Vendor = {
         hint: 'Python has no lts alias — use "3", "3.12", "3.12.7", or "latest"',
       });
     }
+    // 本基线只收 gnu 三元组（filesFor 不筛 libc），musl 主机会静默装上 glibc 构建：
+    // install/use 全程无警告，直到 python3 一跑就 loader 报错。与 nodejs.ts 一样
+    // 在解析阶段就拒绝（原先的 musl 提示放在"别的平台有此版本"分支里，Linux 恒不可达）
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('This baseline ships glibc CPython builds only; musl Linux (Alpine) is not supported', {
+        hint: 'Use the distro python package (apk add python3), or a musl build outside this tool',
+      });
+    }
     const { prefix, files } = await fetchRelease();
     const anywhere = preferStripped(files);
     const forPlatform = filesFor(files, platform);
@@ -255,14 +263,9 @@ export const cpythonVendor: Vendor = {
         if (fromTag) return fromTag;
       }
       if (existsElsewhere) {
-        // musl 主机：不是"没这个版本"，是本基线只收 glibc 构建——把真实原因说出来
-        const muslNote =
-          platform.os === 'linux' && hostLibc(platform.arch) === 'musl'
-            ? ' musl builds do exist upstream but are outside this baseline; on Alpine use the distro python package.'
-            : '';
         throw new SdkvmError(
           `No Python ${formatPythonVersion(existsElsewhere)} archive for ${platform.os}/${platform.arch}`,
-          { hint: `Run \`${cmdPath('python')} ls -r\` and pick a release that ships this platform.${muslNote}` },
+          { hint: `Run \`${cmdPath('python')} ls -r\` and pick a release that ships this platform.` },
         );
       }
       throw new SdkvmError(`No Python release matches "${specLabel(spec)}"`, {

@@ -359,3 +359,46 @@ describe('mrm del 当前镜像回退', () => {
     expect(fs.readFileSync(settingsFile, 'utf8')).toBe(before);
   });
 });
+
+describe('writeSettings 保留原文件属性', () => {
+  it('keeps the original file mode (0600 stays 0600)', () => {
+    fs.writeFileSync(settingsFile, '<settings>\n</settings>\n');
+    fs.chmodSync(settingsFile, 0o600);
+    mrmUse('aliyun');
+    // tmp+rename 默认 0644 会把私有 settings.xml 暴露给同机其它用户
+    expect(fs.statSync(settingsFile).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(settingsFile, 'utf8')).toContain('maven.aliyun.com');
+  });
+
+  it('writes through a dangling symlink instead of replacing the link', () => {
+    const target = path.join(home, 'dotfiles', 'settings.xml');
+    fs.symlinkSync(target, settingsFile);
+    mrmUse('aliyun');
+    // 链接本身还是链接（chezmoi/stow 管理不脱钩），内容写进了链接目标
+    expect(fs.lstatSync(settingsFile).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(target, 'utf8')).toContain('maven.aliyun.com');
+  });
+
+  it('LF-majority mixed-EOL file is not wholesale flipped to CRLF', () => {
+    fs.writeFileSync(settingsFile, '<settings>\r\n<a>\n<b>\n<c>\n</settings>\n');
+    mrmUse('aliyun');
+    const out = fs.readFileSync(settingsFile, 'utf8');
+    // 多数派是 LF：原先"出现过 CRLF 就整体翻 CRLF"会让 LF 行全部漂移
+    expect(out.includes('\r\n<a>')).toBe(false);
+    expect(out).toContain('maven.aliyun.com');
+  });
+
+  it('CRLF-majority file keeps the CRLF style', () => {
+    fs.writeFileSync(settingsFile, '<settings>\r\n<a>\r\n<b>\r\n</settings>\r\n');
+    mrmUse('aliyun');
+    const out = fs.readFileSync(settingsFile, 'utf8');
+    expect((out.match(/\r\n/g) ?? []).length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe('mrm add 输入校验', () => {
+  it('rejects query strings and fragments in repository URLs', () => {
+    expect(() => mrmAdd('corp', 'https://x.com/maven?token=1')).toThrow(/query string or fragment/);
+    expect(() => mrmAdd('corp', 'https://x.com/maven#frag')).toThrow(/query string or fragment/);
+  });
+});

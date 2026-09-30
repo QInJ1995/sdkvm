@@ -37,7 +37,7 @@ async function resolveLatestAsset(
   } catch (err) {
     if (err instanceof HttpError && err.status === 404) {
       throw new SdkvmError(`No Temurin JDK ${major} build for ${os}/${arch}`, {
-        hint: 'This platform is not published for that major. Try another vendor, for example: sdkvm java install 8 --vendor zulu',
+        hint: `This platform is not published for that major. Try another vendor, for example: sdkvm java install ${major} --vendor zulu`,
       });
     }
     throw err;

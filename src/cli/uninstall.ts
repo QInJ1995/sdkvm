@@ -30,9 +30,18 @@ export async function uninstallCommand(
     const wasCurrent = currentSdk(type)?.dirPath === installed.dirPath;
     fs.rmSync(installed.dirPath, { recursive: true, force: true });
     // 兄弟残留一并清掉：只删目录名本身的话，旁边的 .bak 会被 install 的恢复扫描
-    // 当成"孤儿备份"换回 finalDir——刚卸载的版本又复活了
-    fs.rmSync(`${installed.dirPath}.bak`, { recursive: true, force: true });
-    fs.rmSync(`${installed.dirPath}.incomplete`, { force: true });
+    // 当成"孤儿备份"换回 finalDir——刚卸载的版本又复活了。
+    // 目录已删成功，这里的清残留失败（杀软锁 .bak）不能把卸载报成失败并
+    // 跳过下面的 current/rc 清理；复活风险降级为告警 + 手动指引
+    try {
+      fs.rmSync(`${installed.dirPath}.bak`, { recursive: true, force: true });
+      fs.rmSync(`${installed.dirPath}.incomplete`, { force: true });
+    } catch (err) {
+      log.warn(
+        `could not remove the leftover ${installed.dirPath}.bak: ${(err as Error).message}; ` +
+          `remove it manually or the next install may restore this version`,
+      );
+    }
     if (!wasCurrent) {
       log.ok(`removed ${installed.version.vendor}-${spec.formatVersion(installed.version)}`);
       return;

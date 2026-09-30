@@ -357,31 +357,62 @@ function readFileIfExists(file: string): string {
 
 function writeSettings(file: string, content: string): void {
   // settings.xml 常被 chezmoi/stow 等做成符号链接：tmp+rename 会把链接本身换成普通
-  // 文件，脱离用户的 dotfile 管理。写透到链接目标（读侧本来就跟随符号链接）
+  // 文件，脱离用户的 dotfile 管理。写透到链接目标（读侧本来就跟随符号链接）。
+  // 悬空链接 realpathSync 读不出目标会抛错——被吞掉后 tmp+rename 会把链接本身
+  // 换成普通文件，用户 stow 回来就断了；readlink 逐层解析拼写，仍解析不出才按原路径写
   try {
-    if (fs.lstatSync(file).isSymbolicLink()) file = fs.realpathSync(file);
+    let cur = file;
+    for (let hops = 0; hops < 8; hops++) {
+      // 解析出的目标不存在（悬空链接）不是错误：在解析出的路径上创建文件，
+      // 循环条件里直接 lstat 抛 ENOENT 会被外层 catch 吞掉已解析结果、退回
+      // 链接路径写，rename 照样把链接顶掉
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(cur);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') break;
+        throw err;
+      }
+      if (!st.isSymbolicLink()) break;
+      cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+    }
+    file = cur;
   } catch {
-    // 不存在或目标读不出：按原路径写
+    // 目标读不出（权限等）：按原路径写
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  // 非 UTF-8 的 settings.xml（GBK 注释等）：utf8 解码再写回会把原始字节换成替换字符，
-  // 且不可逆。写回前先备份原文件（与 rc 文件同款保护）
+  // 写回要保留的两个原文件属性（都在存在时才读得到）
+  let mode: number | undefined;
   let hadCrlf = false;
   if (fs.existsSync(file)) {
     const raw = fs.readFileSync(file);
+    // 非 UTF-8 的 settings.xml（GBK 注释等）：utf8 解码再写回会把原始字节换成替换字符，
+    // 且不可逆。写回前先备份原文件（与 rc 文件同款保护）
     if (!Buffer.from(raw.toString('utf8'), 'utf8').equals(raw)) {
       const bak = `${file}.sdkvm-bak`;
       fs.copyFileSync(file, bak);
       log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
     }
-    hadCrlf = raw.toString('utf8').includes('\r\n');
+    // 行尾按多数派保留（rc.ts 同款）：混合行尾按"出现过 CRLF"整体翻 CRLF 会让
+    // LF 为主的行全部漂移
+    const text = raw.toString('utf8');
+    const crlf = (text.match(/\r\n/g) ?? []).length;
+    const lf = (text.match(/(?<!\r)\n/g) ?? []).length;
+    hadCrlf = crlf > lf;
+    try {
+      mode = fs.statSync(file).mode & 0o777;
+    } catch {
+      // 读不到权限就按默认创建
+    }
   }
   // 原文件是 CRLF 就整体按 CRLF 写回：applyMrmBlock 内部按 LF 处理，
   // 不恢复的话整个文件的行尾风格会漂移（git diff 全文件变化）
   const withNewline = ensureTrailingNewline(content);
   const out = hadCrlf && !withNewline.includes('\r\n') ? withNewline.replace(/(?<!\r)\n/g, '\r\n') : withNewline;
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, out);
+  // 权限跟随原文件：settings.xml 可能是 0600 的私有文件，tmp+rename 默认 0644
+  // 会把内容暴露给同机其它用户
+  fs.writeFileSync(tmp, out, mode !== undefined ? { mode } : {});
   try {
     fs.renameSync(tmp, file);
   } catch (err) {
@@ -422,6 +453,13 @@ function assertRepoUrl(raw: string): URL {
   if (parsed.username || parsed.password) {
     throw new SdkvmError('Repository URL cannot include a username or password', {
       hint: 'Maven credentials belong in <servers>, not in the mirror URL.',
+    });
+  }
+  // query / fragment 进 <url> 不会被 Maven 当镜像参数用，只会得到一个拉不到东西的
+  // 坏地址；结尾裸 `?`/`#` 在 URL 对象里 search/hash 是空串，判空拦不住，须查原文
+  if (/[?#]/.test(trimmed)) {
+    throw new SdkvmError('Repository URL cannot include a query string or fragment', {
+      hint: 'Use a plain http(s) repository URL.',
     });
   }
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') + '/';
