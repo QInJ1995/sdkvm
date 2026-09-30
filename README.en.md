@@ -167,7 +167,7 @@ Open a new terminal afterwards (or `source` the rc file) and verify:
 
 ```console
 $ sdkvm version
-1.0.8
+1.0.6
 ```
 
 For a custom data root, **pass `SDKVM_HOME` on the install command itself**
@@ -545,7 +545,7 @@ Behavior notes:
 
 ```console
 $ sdkvm version
-1.0.8
+1.0.6
 ```
 
 `sdkvm upgrade` (no arguments): for a script install it downloads the new
