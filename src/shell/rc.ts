@@ -173,7 +173,9 @@ function writeRcAtomic(file: string, content: string): void {
 export function upsertRcFile(file: string, type: SdkTypeId, blockText?: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, upsertRcContent('', type, blockText));
+    // 首次创建同样走 tmp+rename：writeFileSync 写到一半崩溃会留下半截 rc，
+    // 下次会被当成合法 UTF-8 保留
+    writeRcAtomic(file, upsertRcContent('', type, blockText));
     return;
   }
   const raw = fs.readFileSync(file);

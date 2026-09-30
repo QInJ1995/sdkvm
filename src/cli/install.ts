@@ -13,7 +13,7 @@ import { applyMirrorDetail, MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
 import { parseMirrorRootUrl } from './mirror-presets.js';
 import { downloadFile, cacheFileName } from '../net/download.js';
 import { HttpError } from '../net/http.js';
-import { hashFile, preflightChecksum, verifyChecksum } from '../net/checksum.js';
+import { preflightChecksum, verifyChecksum } from '../net/checksum.js';
 import { extractArchive, tmpExtractDir } from '../fs/extract.js';
 import { assertInstallerPrefix, runSilentInstaller } from '../fs/installer.js';
 import { assertContained, normalizeExtracted } from '../fs/layout.js';
@@ -400,7 +400,9 @@ export async function installCommand(
   log.info(`downloading ${artifact.downloadUrl}`);
   let dl: Awaited<ReturnType<typeof downloadFile>>;
   try {
-    dl = await downloadFile(artifact.downloadUrl, dest, (b, t) => progress.update(b, t));
+    // sha512（Maven）在下载流上累计；sha1 降级仍由 verifyChecksum 对落盘文件补算
+    const hashAlg = artifact.checksum?.kind === 'sha512' ? 'sha512' : 'sha256';
+    dl = await downloadFile(artifact.downloadUrl, dest, (b, t) => progress.update(b, t), hashAlg);
   } catch (err) {
     if (err instanceof HttpError && err.status === 404 && vendorId === 'temurin') {
       // full 版本拼出的 asset 名可能不存在（早期 JDK 命名差异）
@@ -412,8 +414,7 @@ export async function installCommand(
   }
   progress.done(dl.bytes, dl.total);
 
-  const actual =
-    artifact.checksum?.kind === 'sha512' ? await hashFile(dest, 'sha512') : dl.sha256;
+  const actual = dl.digest;
 
   const tmp = tmpExtractDir(paths.tmp());
   try {
@@ -430,6 +431,12 @@ export async function installCommand(
       preparedRoot = normalizedRoot;
     }
 
+    // 清扫放在锁外：删掉别人留下的大解压目录可能要几秒，不应挡住 use/uninstall。
+    // 按 pid 跳过活进程，本次 extract 目录的主人还活着，不会被这次清扫删掉。
+    // .part 的 mtime 随每个分块刷新，进行中的下载也不会被按龄清掉。
+    sweepStaleParts();
+    sweepStaleTmp();
+
     // ---- 变更阶段：锁只覆盖安装目录的换位与安装器执行 ----
     // 变更阶段紧跟长下载：他人持锁时有界等待（旧流程下载完才发现锁被占，
     // 整次下载作废），等到或超时（LockBusyError）才放弃
@@ -443,8 +450,6 @@ export async function installCommand(
           }
           log.warn(`--force: removing existing ${artifact.dirName}`);
         }
-        sweepStaleParts();
-        sweepStaleTmp();
 
         const bak = `${finalDir}.bak`;
         const incomplete = `${finalDir}.incomplete`;

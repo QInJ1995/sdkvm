@@ -280,6 +280,19 @@ describe('rc 标记行首锚定', () => {
     expect(out.endsWith('\r\n')).toBe(true);
   });
 
+  it('首次创建也走原子写，不留下半截文件或 tmp', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-create-'));
+    const file = path.join(dir, '.zshrc');
+    try {
+      upsertRcFile(file, 'java');
+      const residue = fs.readdirSync(dir).filter((n) => n.includes('sdkvm-tmp'));
+      expect(residue).toEqual([]);
+      expect(fs.readFileSync(file, 'utf8')).toContain(rcBegin('java'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('原子写不残留 tmp 文件', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-atomic-'));
     const file = path.join(dir, '.zshrc');

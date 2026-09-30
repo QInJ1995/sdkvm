@@ -74,8 +74,19 @@ describe('downloadFile 长度校验', () => {
     const r = await downloadFile('https://example.com/a.zip', dest);
     expect(r.bytes).toBe(11);
     expect(r.sha256).toBe(crypto.createHash('sha256').update('hello world').digest('hex'));
+    expect(r.digest).toBe(r.sha256);
+    expect(r.algorithm).toBe('sha256');
     // 显式要求不压缩
     expect(calls[0]).toMatchObject({ 'accept-encoding': 'identity' });
+  });
+
+  it('sha512 在下载流上累计，不再留下空的 sha256', async () => {
+    stubFetch('hello world', { 'content-length': '11' });
+    const dest = path.join(dir, 'sha512.zip');
+    const r = await downloadFile('https://example.com/sha512.zip', dest, undefined, 'sha512');
+    expect(r.algorithm).toBe('sha512');
+    expect(r.digest).toBe(crypto.createHash('sha512').update('hello world').digest('hex'));
+    expect(r.sha256).toBe('');
   });
 
   it('透明压缩（content-encoding 存在）：解压后字节数 > content-length 不再误判不完整', async () => {

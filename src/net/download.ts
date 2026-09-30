@@ -5,8 +5,18 @@ import { httpFetch } from './http.js';
 import { SdkvmError } from '../util/errors.js';
 import { renameWithRetry } from '../util/rename.js';
 
+/** 下载流上累计的摘要算法。sha1 只在校验旁路降级后对已落盘文件补算。 */
+export type DownloadHash = 'sha256' | 'sha512';
+
 export interface DownloadResult {
   file: string;
+  /** 下载时累计的摘要，算法见 algorithm */
+  digest: string;
+  algorithm: DownloadHash;
+  /**
+   * algorithm 为 sha256 时与 digest 相同。
+   * sha512 下载不算 sha256，此字段为空，调用方用 digest。
+   */
   sha256: string;
   bytes: number;
   /** 服务端声明的 content-length（压缩传输或缺失时为 null） */
@@ -93,11 +103,13 @@ export async function downloadFile(
   url: string,
   destFile: string,
   onProgress?: (bytes: number, total: number | null) => void,
+  algorithm: DownloadHash = 'sha256',
 ): Promise<DownloadResult> {
   // .part 带进程号：下载在锁外进行，同 URL 并发下载各写各的临时文件，
   // 完成时各自原子 rename 到 dest（同 URL 内容相同，先后覆盖无害）
   const partFile = `${destFile}.tmp-${process.pid}.part`;
-  const hash = crypto.createHash('sha256');
+  // Maven 的官方旁路是 sha512。下载时按目标算法累计，避免落盘后再把归档整份读一遍。
+  const hash = crypto.createHash(algorithm);
   const out = fs.createWriteStream(partFile);
   const stream = watchWriteStream(out);
   let bytes = 0;
@@ -130,7 +142,7 @@ export async function downloadFile(
       timer.refresh();
       throwIfStreamError();
       // Node fetch / undici 会复用 body 缓冲区；fs.write 在回调返回前仍持有这块内存。
-      // 不拷贝的话，下一块数据会在写盘完成前覆盖上一块，归档和 sha256 一起坏掉。
+      // 不拷贝的话，下一块数据会在写盘完成前覆盖上一块，归档和摘要一起坏掉。
       const data = Buffer.from(chunk);
       hash.update(data);
       bytes += data.length;
@@ -190,7 +202,15 @@ export async function downloadFile(
   }
   // 与安装目录落位一致：Windows 上杀毒可能短暂锁住刚写完的 .part
   await renameWithRetry(partFile, destFile);
-  return { file: destFile, sha256: hash.digest('hex'), bytes, total };
+  const digest = hash.digest('hex');
+  return {
+    file: destFile,
+    digest,
+    algorithm,
+    sha256: algorithm === 'sha256' ? digest : '',
+    bytes,
+    total,
+  };
 }
 
 export function cacheFileName(url: string): string {

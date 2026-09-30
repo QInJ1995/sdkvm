@@ -12,14 +12,21 @@ function humanBytes(n: number): string {
   return `${v.toFixed(1)}${units[i]}`;
 }
 
-/** stderr 单行进度条；非 TTY 降级为每 16MB 打一行 */
+/** TTY 进度刷新间隔。每个分块都写 stderr 会在大归档上下拖慢下载循环。 */
+const TTY_INTERVAL_MS = 100;
+
+/** stderr 单行进度条；TTY 约每 100ms 刷新一次，非 TTY 降级为每 16MB 打一行 */
 export function createProgress(label: string) {
   const isTty = process.stderr.isTTY === true;
   let lastLine = 0;
+  let lastDraw = 0;
 
   return {
     update(bytes: number, total: number | null): void {
       if (isTty) {
+        const now = Date.now();
+        if (now - lastDraw < TTY_INTERVAL_MS) return;
+        lastDraw = now;
         const ratio = total ? Math.min(1, bytes / total) : null;
         const bar =
           ratio === null
