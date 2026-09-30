@@ -389,7 +389,7 @@ describe('mrm del 当前镜像回退', () => {
 });
 
 describe('writeSettings 保留原文件属性', () => {
-  it('keeps the original file mode (0600 stays 0600)', () => {
+  it.skipIf(process.platform === 'win32')('keeps the original file mode (0600 stays 0600)', () => {
     fs.writeFileSync(settingsFile, '<settings>\n</settings>\n');
     fs.chmodSync(settingsFile, 0o600);
     mrmUse('aliyun');

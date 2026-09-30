@@ -69,7 +69,9 @@ describe('rc block', () => {
   it('root outside home falls back to absolute path', () => {
     process.env.SDKVM_HOME = '/opt/custom-root';
     const block = rcBlock('go');
-    expect(block).toContain('"/opt/custom-root/current-go"');
+    // Windows 上 path.resolve('/opt/...') 会带上当前盘符，断言解析后的 posix 路径
+    const abs = path.resolve('/opt/custom-root', 'current-go').split(path.sep).join('/');
+    expect(block).toContain(`"${abs}"`);
     expect(block).not.toContain('$HOME/../');
   });
 });

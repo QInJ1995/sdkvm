@@ -25,16 +25,17 @@ export function rcBlock(type: SdkTypeId): string {
   const rel = path.relative(os.homedir(), abs);
   // rc 是 shell 脚本，分隔符永远用 /（Windows 上 path.relative 会给出 \）
   const toPosix = (p: string) => p.split(path.sep).join('/');
+  const posixAbs = toPosix(abs);
   // 根目录在 home 之外（SDKVM_HOME 自定义，或跨盘导致 path.relative 返回绝对路径）时退回绝对 posix 路径
   const fallbackAbs = rel.startsWith('..') || path.isAbsolute(rel);
-  // 路径含 " / ` / $ / ! / \ 时改用单引号字面量。
-  // 双引号挡不住交互 shell 的 history expansion（!）和反斜杠转义；
-  // 此时也不用 $HOME/ 相对形式（单引号会关掉展开）
-  const needsLiteral = /["'`$!\\]/.test(abs);
+  // 写进 rc 的是 posix 路径。Windows 的 \ 只是分隔符，转成 / 之后不再算元字符。
+  // 路径仍含 " / ` / $ / ! / \ 时改用单引号：双引号挡不住 history expansion 和反斜杠转义，
+  // 单引号也会关掉 $HOME 展开，所以这时不用相对形式。
+  const needsLiteral = /["'`$!\\]/.test(posixAbs);
   const link = needsLiteral
-    ? `'${toPosix(abs).replace(/'/g, `'\\''`)}'`
+    ? `'${posixAbs.replace(/'/g, `'\\''`)}'`
     : fallbackAbs
-      ? toPosix(abs)
+      ? posixAbs
       : `$HOME/${toPosix(rel)}`;
   // needsLiteral 时 link 自带单引号，外层不能再套双引号（否则引号进值、$ 仍展开）
   const homeLine = needsLiteral

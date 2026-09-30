@@ -255,7 +255,7 @@ describe('extract 路径穿越', () => {
     expect(fs.readdirSync(victim)).toEqual([]);
   });
 
-  it.skipIf(!HAS_UNZIP)('linux zip 的 .. 成员不会落到目标目录外', async () => {
+  it.skipIf(process.platform !== 'linux' || !HAS_UNZIP)('linux zip 的 .. 成员不会落到目标目录外', async () => {
     const zip = path.join(work, 'slip.zip');
     const payload = Buffer.from('ok');
     writeZip(zip, [
