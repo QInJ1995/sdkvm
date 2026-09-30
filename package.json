@@ -1,6 +1,6 @@
 {
   "name": "sdkvm",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "SDK version manager — Java (Temurin / Zulu / Corretto), Go, Flutter, Node.js, Maven, Miniconda & Python",
   "type": "module",
   "bin": {
@@ -48,9 +48,18 @@
     "corretto"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QInJ1995/sdkvm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/QInJ1995/sdkvm/issues"
+  },
+  "homepage": "https://github.com/QInJ1995/sdkvm#readme",
   "dependencies": {
     "commander": "^15.0.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "undici": "^6.29.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
