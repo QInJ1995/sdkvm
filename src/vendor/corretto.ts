@@ -2,7 +2,7 @@ import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './ty
 import { httpFetch, httpText, HttpError } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, formatVersion, parseVersion } from '../core/version.js';
-import { detectPlatform } from '../core/platform.js';
+import { detectPlatform, hostLibc } from '../core/platform.js';
 import { temurinVendor } from './temurin.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { log } from '../ui/log.js';
@@ -122,6 +122,11 @@ export const correttoVendor: Vendor = {
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Amazon Corretto publishes no musl/Alpine builds', {
+        hint: 'Use Temurin (sdkvm java install <version>), or the distro JDK (apk add openjdk21).',
+      });
+    }
     let version: string;
     let majorSha: string | null = null;
     if (spec.kind === 'lts') {

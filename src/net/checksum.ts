@@ -21,6 +21,50 @@ function hex64(value: unknown): string | null {
   return hexOf(value, 'sha256');
 }
 
+/** GitHub 资产 `.json` 与 Adoptium release API（对象或数组，哈希在 package.checksum）共用。 */
+function checksumFromJson(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const hit = checksumFromJson(item);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as {
+    checksum?: unknown;
+    sha256?: unknown;
+    hashes?: unknown;
+    package?: unknown;
+    binary?: unknown;
+    binaries?: unknown;
+  };
+  const direct = hex64(obj.checksum) ?? hex64(obj.sha256);
+  if (direct) return direct;
+  if (Array.isArray(obj.hashes)) {
+    for (const item of obj.hashes) {
+      if (!item || typeof item !== 'object') continue;
+      const hash = item as { alg?: unknown; content?: unknown };
+      const alg = typeof hash.alg === 'string' ? hash.alg.toLowerCase().replace(/-/g, '') : '';
+      if (alg === 'sha256') {
+        const content = hex64(hash.content);
+        if (content) return content;
+      }
+    }
+  }
+  for (const nested of [obj.package, obj.binary]) {
+    const hit = checksumFromJson(nested);
+    if (hit) return hit;
+  }
+  if (Array.isArray(obj.binaries)) {
+    for (const binary of obj.binaries) {
+      const hit = checksumFromJson(binary);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /**
  * 解析一行 `sha256sum` 输出。文本模式是 `hash  file`，二进制模式是 `hash *file`。
  * 星号属于模式标记，不是文件名。
@@ -49,26 +93,10 @@ export function extractExpectedChecksum(
   artifactName?: string,
 ): string | null {
   const trimmed = text.trim();
-  if (kind === 'sha256' && trimmed.startsWith('{')) {
+  if (kind === 'sha256' && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
     try {
-      const obj = JSON.parse(trimmed) as {
-        checksum?: unknown;
-        sha256?: unknown;
-        hashes?: unknown;
-      };
-      const direct = hex64(obj.checksum) ?? hex64(obj.sha256);
-      if (direct) return direct;
-      if (Array.isArray(obj.hashes)) {
-        for (const item of obj.hashes) {
-          if (!item || typeof item !== 'object') continue;
-          const hash = item as { alg?: unknown; content?: unknown };
-          const alg = typeof hash.alg === 'string' ? hash.alg.toLowerCase().replace(/-/g, '') : '';
-          if (alg === 'sha256') {
-            const content = hex64(hash.content);
-            if (content) return content;
-          }
-        }
-      }
+      const hit = checksumFromJson(JSON.parse(trimmed));
+      if (hit) return hit;
     } catch {
       // 非法 JSON 视为无校验
     }

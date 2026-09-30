@@ -8,7 +8,7 @@ import {
   parseFlutterVersion,
   type SdkVersion,
 } from '../core/version.js';
-import { detectPlatform } from '../core/platform.js';
+import { detectPlatform, hostLibc } from '../core/platform.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { groupMinorLines, specLabel } from './shared.js';
 
@@ -101,6 +101,11 @@ export const flutterVendor: Vendor = {
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Flutter publishes no musl/Alpine engine builds', {
+        hint: 'Official Linux archives are glibc. Use a glibc distro, or install Flutter outside this tool.',
+      });
+    }
     if (spec.kind === 'lts' || spec.kind === 'major') {
       // flutter 语法不会产出 lts/major（java 专用），防御性拒绝
       throw new SdkvmError(`Unsupported version spec for Flutter: ${spec.kind}`);

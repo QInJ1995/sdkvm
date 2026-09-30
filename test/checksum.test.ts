@@ -42,6 +42,16 @@ describe('extractExpectedChecksum', () => {
     expect(extractExpectedChecksum(JSON.stringify({ checksum: hash }))).toBe(hash);
   });
 
+  it('reads Adoptium release_name JSON (array of binary.package.checksum)', () => {
+    expect(
+      extractExpectedChecksum(
+        JSON.stringify([
+          { binary: { package: { checksum: hash, link: 'https://example.com/jdk.tar.gz' } } },
+        ]),
+      ),
+    ).toBe(hash);
+  });
+
   it('reads a SHA-256 entry from the legacy hashes array', () => {
     expect(
       extractExpectedChecksum(

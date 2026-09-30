@@ -1,4 +1,10 @@
+import { hostLibc } from '../core/platform.js';
 import type { ResolvedArtifact, VendorPlatform } from './types.js';
+
+/** 字符串替换会把 `$&` / `$$` / `$'` 当模式。镜像根原样贴上。 */
+function replacePrefix(url: string, pattern: RegExp, root: string): string {
+  return url.replace(pattern, () => root);
+}
 
 /** 支持 applyMirror 改写的 vendor（与 mirror-presets 对齐） */
 export const MIRROR_REWRITE_VENDORS = new Set([
@@ -42,30 +48,28 @@ export function applyMirrorDetail(
     return { artifact: { ...artifact, downloadUrl: `${root}/${file}` }, applied: true };
   }
   if (artifact.vendorId === 'flutter') {
-    const url = artifact.downloadUrl.replace(
-      /^https:\/\/storage\.googleapis\.com\/flutter_infra_release/,
-      root,
-    );
+    const url = replacePrefix(artifact.downloadUrl, /^https:\/\/storage\.googleapis\.com\/flutter_infra_release/, root);
     if (url === artifact.downloadUrl) return { artifact, applied: false };
     return { artifact: { ...artifact, downloadUrl: url }, applied: true };
   }
   if (artifact.vendorId === 'nodejs') {
-    const url = artifact.downloadUrl.replace(/^https:\/\/nodejs\.org\/dist/, root);
+    const url = replacePrefix(artifact.downloadUrl, /^https:\/\/nodejs\.org\/dist/, root);
     if (url === artifact.downloadUrl) return { artifact, applied: false };
     return { artifact: { ...artifact, downloadUrl: url }, applied: true };
   }
   if (artifact.vendorId === 'maven') {
-    const url = artifact.downloadUrl.replace(/^https:\/\/repo\.maven\.apache\.org\/maven2/, root);
+    const url = replacePrefix(artifact.downloadUrl, /^https:\/\/repo\.maven\.apache\.org\/maven2/, root);
     if (url === artifact.downloadUrl) return { artifact, applied: false };
     return { artifact: { ...artifact, downloadUrl: url }, applied: true };
   }
   if (artifact.vendorId === 'miniconda') {
-    const url = artifact.downloadUrl.replace(/^https:\/\/repo\.anaconda\.com\/miniconda/, root);
+    const url = replacePrefix(artifact.downloadUrl, /^https:\/\/repo\.anaconda\.com\/miniconda/, root);
     if (url === artifact.downloadUrl) return { artifact, applied: false };
     return { artifact: { ...artifact, downloadUrl: url }, applied: true };
   }
   if (artifact.vendorId === 'cpython') {
-    const url = artifact.downloadUrl.replace(
+    const url = replacePrefix(
+      artifact.downloadUrl,
       /^https:\/\/github\.com\/astral-sh\/python-build-standalone\/releases\/download/,
       root,
     );
@@ -78,6 +82,7 @@ export function applyMirrorDetail(
       artifact.downloadUrl,
     );
   if (!m || !m[1] || !m[2]) return { artifact, applied: false };
-  const url = `${root}/${m[1]}/jdk/${platform.arch}/${platform.os}/${m[2]}`;
+  const osToken = platform.os === 'linux' && hostLibc(platform.arch) === 'musl' ? 'alpine-linux' : platform.os;
+  const url = `${root}/${m[1]}/jdk/${platform.arch}/${osToken}/${m[2]}`;
   return { artifact: { ...artifact, downloadUrl: url }, applied: true };
 }

@@ -72,6 +72,26 @@ export function normalizeExtracted(tmpDir: string, platform: Platform, type: Sdk
  * 外部 tar/unzip 对 `..` 成员与符号链接的处理因实现而异，
  * 在把根目录改名进安装目录之前做一次包含性审计：条目不得逃逸、符号链接不得外指。
  */
+/** 符号链接返回链接文本；Windows junction（lstat 不是 symlink）同样返回文本。
+ *  普通目录返回 undefined。读不出文本的链接返回 null。 */
+function reparseText(entryPath: string, st: fs.Stats): string | null | undefined {
+  if (st.isSymbolicLink()) {
+    try {
+      return fs.readlinkSync(entryPath);
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === 'win32' && st.isDirectory()) {
+    try {
+      return fs.readlinkSync(entryPath);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 export function assertContained(destDir: string, root: string): void {
   const base = path.resolve(destDir);
   const within = (p: string): boolean => {
@@ -106,7 +126,10 @@ export function assertContained(destDir: string, root: string): void {
       } catch {
         continue;
       }
-      if (st.isSymbolicLink()) {
+      // Windows junction 的 lstat 往往不是 symlink、但是目录。readlink 能读出目标。
+      // 当成普通目录 walk 进去时，path.resolve 不解析重解析点，越界目标会被留下。
+      const linkText = reparseText(entryPath, st);
+      if (linkText !== undefined) {
         let real: string | null = null;
         try {
           real = fs.realpathSync(entryPath);
@@ -116,21 +139,15 @@ export function assertContained(destDir: string, root: string): void {
         // 悬空链接（目标不存在）无法 realpath：按链接文本做词法判断——
         // 相对目标 resolve 后仍须落在包内；绝对目标才视为越界
         if (!real) {
-          let target: string | null = null;
-          try {
-            target = fs.readlinkSync(entryPath);
-          } catch {
-            target = null;
-          }
-          if (target == null) continue;
-          const resolved = path.isAbsolute(target)
-            ? path.resolve(target)
-            : path.resolve(path.dirname(entryPath), target);
+          if (linkText == null) continue;
+          const resolved = path.isAbsolute(linkText)
+            ? path.resolve(linkText)
+            : path.resolve(path.dirname(entryPath), linkText);
           // 词法 resolve 的结果带的是 destDir 的原始拼写（如 macOS 的 /var/...），
           // 与 realpath 基（/private/var/...）拼写不同不代表越界：两个基任一命中即可
           if (!withinReal(resolved) && !within(resolved)) {
             throw new SdkvmError(`Archive symlink points outside the extraction directory: ${ent.name}`, {
-              hint: `${target} → ${resolved}`,
+              hint: `${linkText} → ${resolved}`,
             });
           }
           continue;
@@ -140,6 +157,7 @@ export function assertContained(destDir: string, root: string): void {
             hint: real,
           });
         }
+        continue;
       }
       if (st.isDirectory()) walk(entryPath);
     }

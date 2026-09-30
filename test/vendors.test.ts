@@ -103,6 +103,10 @@ describe('temurin', () => {
     expect(a.downloadUrl).toBe(
       'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz',
     );
+    expect(a.checksum && 'url' in a.checksum ? a.checksum.url : '').toContain(
+      '/v3/assets/release_name/jdk-21.0.5%2B11',
+    );
+    expect(a.checksum && 'url' in a.checksum ? a.checksum.url : '').not.toContain('.json');
   });
 
   it('keeps X.0.0 uncollapsed in the asset file name', async () => {

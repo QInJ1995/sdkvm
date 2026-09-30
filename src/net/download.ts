@@ -117,10 +117,16 @@ export async function downloadFile(
   let encoded = false;
   let stalled = false;
   const ac = new AbortController();
-  const timer = setTimeout(() => {
-    stalled = true;
-    ac.abort();
-  }, IDLE_TIMEOUT_MS);
+  // 空闲计时从响应头到达后才开始。429 的 Retry-After 发生在 httpFetch 内部，
+  // 若此刻就计时，退避还没结束就会被误判成断流。连接阶段由 httpFetch 的每次尝试超时兜住。
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const armIdle = (): void => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      stalled = true;
+      ac.abort();
+    }, IDLE_TIMEOUT_MS);
+  };
 
   const throwIfStreamError = (): void => {
     const err = stream.error();
@@ -133,13 +139,14 @@ export async function downloadFile(
       signal: ac.signal,
       headers: { 'accept-encoding': 'identity' },
     });
-    timer.refresh(); // 响应头到达，转入流式阶段
+    armIdle();
     total = Number(res.headers.get('content-length')) || null;
-    // 若服务端仍坚持压缩（undici 透明解压），长度校验失效，完整性交给 sha256
-    encoded = Boolean(res.headers.get('content-encoding'));
+    // identity / 缺省表示未压缩，必须核对 content-length。
+    // 只有真实压缩（gzip/br/deflate，undici 会解压）才让长度与声明值不可比。
+    encoded = isCompressedEncoding(res.headers.get('content-encoding'));
     if (!res.body) throw new SdkvmError(`Empty response body: ${url}`);
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-      timer.refresh();
+      armIdle();
       throwIfStreamError();
       // Node fetch / undici 会复用 body 缓冲区；fs.write 在回调返回前仍持有这块内存。
       // 不拷贝的话，下一块数据会在写盘完成前覆盖上一块，归档和摘要一起坏掉。
@@ -149,7 +156,7 @@ export async function downloadFile(
       if (!out.write(data)) {
         await waitForDrain(out, ac.signal);
         // 背压等待期间收不到 chunk，计时器会空转误报"无数据"——drain 回来即刷新
-        timer.refresh();
+        armIdle();
       }
       throwIfStreamError();
       onProgress?.(bytes, total);
@@ -168,6 +175,8 @@ export async function downloadFile(
       });
     });
   } catch (err) {
+    // 停掉还在推的响应体，避免失败后连接挂到对端超时
+    ac.abort();
     // destroy 会让还在飞的 write 回调发出 ERR_STREAM_DESTROYED；上面的 error 监听负责接住
     await closeWriteStream(out);
     try {
@@ -184,7 +193,7 @@ export async function downloadFile(
     const detail = err instanceof Error ? err.message : String(err);
     throw new SdkvmError(`Download failed after ${bytes} bytes: ${detail}`, { hint: url });
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 
   if (bytes === 0 || (total !== null && !encoded && bytes !== total)) {
@@ -211,6 +220,15 @@ export async function downloadFile(
     bytes,
     total,
   };
+}
+
+/** `identity` 和缺省都表示正文未压缩。其余编码（gzip/br/deflate）由客户端解压，不能拿 content-length 比字节数。 */
+function isCompressedEncoding(value: string | null): boolean {
+  if (!value) return false;
+  return value
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .some((part) => part !== '' && part !== 'identity');
 }
 
 export function cacheFileName(url: string): string {

@@ -1,4 +1,5 @@
 import { loadConfig, updateConfig } from '../core/config.js';
+import { HttpError, httpFetch } from '../net/http.js';
 import { npmExec, run } from '../util/spawn.js';
 import { SdkvmError } from '../util/errors.js';
 import { log } from '../ui/log.js';
@@ -93,14 +94,17 @@ export async function defaultRegistryProbe(url: string): Promise<number> {
   const target = new URL(url);
   if (!target.pathname.endsWith('/')) target.pathname += '/';
   const started = Date.now();
-  const res = await fetch(target, {
-    method: 'HEAD',
-    redirect: 'follow',
-    signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
-  });
-  // 部分 registry 对 HEAD 返回 404/405，只要能连上就算通
-  if (res.status >= 500) {
-    throw new Error(`HTTP ${res.status}`);
+  try {
+    // 与下载同一代理通道。4xx（不少源对 HEAD 回 404/405）只要连上就算通。
+    const res = await httpFetch(target.href, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
+    });
+    await res.body?.cancel()?.catch(() => undefined);
+  } catch (err) {
+    if (err instanceof HttpError && err.status > 0 && err.status < 500) return Date.now() - started;
+    throw err;
   }
   return Date.now() - started;
 }
@@ -191,7 +195,11 @@ export function nrmAdd(name: string, url: string): void {
       hint: 'Put npm credentials in ~/.npmrc (_auth) or a .yarnrc.yml token, not the URL.',
     });
   }
-  // 只规范化 pathname 尾斜杠，保留 query/hash
+  if (/[?#]/.test(url.trim())) {
+    throw new SdkvmError('Registry URL cannot include a query string or fragment', {
+      hint: 'Put npm credentials in ~/.npmrc (_auth), not in the registry URL.',
+    });
+  }
   parsed.pathname = parsed.pathname.replace(/\/+$/, '') + '/';
   const normalized = parsed.href;
   updateConfig((config) => {

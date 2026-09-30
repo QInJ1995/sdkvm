@@ -83,18 +83,32 @@ function writeIncompleteMarker(incomplete: string, replacing: boolean, mode: Ins
   fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing, mode }));
 }
 
-/** 安装成功后撤下标记。rm 失败（杀软锁文件等）时改写为 settled:true：
- *  标记留在盘上会让 registry 继续隐藏完好的安装、下次恢复还会当半成品误删，
- *  settled 语义 = "finalDir 已完好"，恢复路径据此只清标记不动目录 */
+/** 安装成功后撤下标记。先把标记改写成 settled:true，再尝试删除。
+ *  删文件可能被杀软拒绝，但覆盖通常还能成功：恢复路径看到 settled 就只清标记、不回滚。
+ *  若连覆盖也失败，盘上仍是「进行中」标记，installer 恢复会在目录已含可执行文件时保留新装。 */
 function settleMarkerQuietly(incomplete: string, mode: InstallMode): void {
   try {
-    fs.rmSync(incomplete, { force: true });
+    fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing: true, mode, settled: true }));
   } catch (err) {
-    try {
-      fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing: true, mode, settled: true }));
-    } catch {
-      log.warn(`installed, but could not remove ${incomplete}: ${(err as Error).message}`);
-    }
+    log.warn(`installed, but could not mark ${incomplete} settled: ${(err as Error).message}`);
+    return;
+  }
+  try {
+    fs.rmSync(incomplete, { force: true });
+  } catch {
+    // settled 标记留在盘上：registry 仍把它视为已安装
+  }
+}
+
+/** 安装器没有原子换位。标记仍是「进行中」但 prefix 里已经有可执行文件时，
+ *  视为安装器已成功、只是收尾标记没改成 settled，保留新目录。 */
+function installerLooksComplete(finalDir: string, type: SdkTypeId): boolean {
+  try {
+    const spec = getSdkType(type);
+    const platform = detectPlatform();
+    return fs.existsSync(path.join(spec.locateHome(finalDir), spec.binRelPath(platform)));
+  } catch {
+    return false;
   }
 }
 
@@ -103,7 +117,7 @@ function settleMarkerQuietly(incomplete: string, mode: InstallMode): void {
  * 半成品目录会被 existsSync 误判成"已安装"。按 .incomplete 标记恢复 .bak 里的旧安装
  * 或清掉半成品；标记缺失时把 finalDir 原样保留（宁可信其完好）。
  */
-function recoverInterrupted(finalDir: string): void {
+function recoverInterrupted(finalDir: string, type: SdkTypeId): void {
   const incomplete = `${finalDir}.incomplete`;
   if (!fs.existsSync(incomplete)) return;
   const bak = `${finalDir}.bak`;
@@ -142,8 +156,11 @@ function recoverInterrupted(finalDir: string): void {
     if (fs.existsSync(bak)) {
       if (mode === 'archive' && fs.existsSync(finalDir)) {
         // 归档换位是一次原子 rename：finalDir 在即新装已完整落位，
-        // 中断只发生在收尾清理。保留新装、清掉 bak（installer 模式无此保证，仍回滚）
+        // 中断只发生在收尾清理。保留新装、清掉 bak
         log.warn(`an earlier install of ${name} had completed; kept it and dropped the leftover backup`);
+        removeBackupQuietly(bak);
+      } else if (mode === 'installer' && installerLooksComplete(finalDir, type)) {
+        log.warn(`an earlier installer run of ${name} had finished; kept it and dropped the leftover backup`);
         removeBackupQuietly(bak);
       } else {
         fs.rmSync(finalDir, { recursive: true, force: true });
@@ -198,7 +215,7 @@ export function recoverInterruptedInstalls(type: SdkTypeId): void {
   }
   for (const name of names) {
     if (name.endsWith('.incomplete')) {
-      recoverInterrupted(path.join(root, name.slice(0, -'.incomplete'.length)));
+      recoverInterrupted(path.join(root, name.slice(0, -'.incomplete'.length)), type);
     }
   }
   for (const name of names) {

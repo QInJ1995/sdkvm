@@ -98,6 +98,14 @@ describe('downloadFile 长度校验', () => {
     expect(r.sha256).toBe(crypto.createHash('sha256').update('hello world').digest('hex'));
   });
 
+  it('content-encoding: identity 且截断：仍按 content-length 硬失败', async () => {
+    stubFetch('hello', { 'content-length': '11', 'content-encoding': 'identity' });
+    const dest = path.join(dir, 'identity.zip');
+    await expect(downloadFile('https://example.com/identity.zip', dest)).rejects.toThrow(
+      /Download incomplete: 5\/11 bytes/,
+    );
+  });
+
   it('无 content-encoding 且截断：仍硬失败并清理 .part', async () => {
     stubFetch('hello', { 'content-length': '11' });
     const dest = path.join(dir, 'c.zip');

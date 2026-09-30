@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { cpythonVendor } from '../src/vendor/python.js';
 import { minicondaVendor } from '../src/vendor/miniconda.js';
 import { nodejsVendor } from '../src/vendor/nodejs.js';
+import { correttoVendor } from '../src/vendor/corretto.js';
+import { flutterVendor } from '../src/vendor/flutter.js';
+import { temurinVendor } from '../src/vendor/temurin.js';
 
 // 文件级 mock：hostLibc 恒报 musl（模拟 Alpine 等 musl 主机），其余 platform 行为原样。
 // 三个基线都是 glibc-only：守卫必须在任何网络请求之前于 resolve 入口拒绝，
@@ -27,6 +30,28 @@ describe('musl 主机守卫（glibc-only 基线在解析期拒绝）', () => {
     await expect(nodejsVendor.resolve({ kind: 'latest' }, { os: 'linux', arch: 'aarch64' })).rejects.toThrow(
       /musl/i,
     );
+  });
+
+  it('corretto and flutter reject musl before any network call', async () => {
+    await expect(correttoVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
+    await expect(flutterVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
+  });
+
+  it('temurin major on musl asks Adoptium for alpine-linux', async () => {
+    const link =
+      'https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_alpine-linux_hotspot_21.0.5_11.tar.gz';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        expect(String(url)).toContain('os=alpine-linux');
+        return new Response(JSON.stringify([{ binary: { package: { link, checksum: 'a'.repeat(64) } } }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    const a = await temurinVendor.resolve({ kind: 'major', major: 21 }, LINUX_X64);
+    expect(a.downloadUrl).toBe(link);
   });
 
   it('guards do not fire for non-linux platforms', async () => {

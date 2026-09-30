@@ -81,12 +81,21 @@ lock_acquire() {
 # 只删自己的锁：持锁超过 5 分钟时 CLI 可能已按 stale 把它偷走并转手，
 # 无条件 rm -rf 会删掉新持有者的锁
 lock_release() {
-  if [ "$LOCK_HELD" = 1 ]; then
-    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
+  if [ "$LOCK_HELD" != 1 ]; then
+    return
+  fi
+  LOCK_HELD=0
+  # 与 lock.ts releaseLock 相同：先 rename 再核对 pid。读到自己的 pid 之后直接 rm
+  # 会在偷锁窗口删掉新持有者刚建的锁。
+  staging="$ROOT/.lock.rel-$$"
+  rm -rf "$staging" 2>/dev/null || :
+  if mv "$ROOT/.lock" "$staging" 2>/dev/null; then
+    holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$staging/info.json" 2>/dev/null || :)
     if [ "$holder" = "$$" ]; then
-      rm -rf "$ROOT/.lock" 2>/dev/null || :
+      rm -rf "$staging" 2>/dev/null || :
+    else
+      mv "$staging" "$ROOT/.lock" 2>/dev/null || :
     fi
-    LOCK_HELD=0
   fi
 }
 # 持锁期间刷新目录 mtime：慢盘/NAS/杀毒扫描让临界区超过 5 分钟时，
@@ -170,8 +179,10 @@ shell_quote() {
 }
 
 echo "sdkvm: downloading Node.js ${RUNTIME_NODE_VERSION} (${node_os}/${node_arch})"
+# 归档可以走镜像；校验和固定来自 nodejs.org，避免镜像同时伪造归档和 SHASUMS
+OFFICIAL_NODE_DIST="https://nodejs.org/dist"
 fetch "${NODE_DIST}/v${RUNTIME_NODE_VERSION}/${node_archive}" "$tmpdir/$node_archive"
-fetch "${NODE_DIST}/v${RUNTIME_NODE_VERSION}/SHASUMS256.txt" "$tmpdir/SHASUMS256.txt"
+fetch "${OFFICIAL_NODE_DIST}/v${RUNTIME_NODE_VERSION}/SHASUMS256.txt" "$tmpdir/SHASUMS256.txt"
 expected=$(expect_hash "$node_archive" "$tmpdir/SHASUMS256.txt")
 actual=$(sha256_of "$tmpdir/$node_archive")
 if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
@@ -197,7 +208,7 @@ mkdir -p "$ROOT/runtime" "$BIN_DIR"
 # 会留下残缺的 node 目录，shim 一运行就报 loader 错
 rm -rf "$ROOT/runtime.next"
 mkdir -p "$ROOT/runtime.next"
-if ! tar -xzf "$tmpdir/$node_archive" -C "$ROOT/runtime.next"; then
+if ! tar -xzf "$tmpdir/$node_archive" -C "$ROOT/runtime.next" --exclude '*..*'; then
   rm -rf "$ROOT/runtime.next"
   echo "sdkvm: failed to extract the Node.js archive" >&2
   exit 1
@@ -217,16 +228,17 @@ if [ -d "$ROOT/runtime/current" ] && [ ! -L "$ROOT/runtime/current" ]; then
 fi
 ln -sfn "$node_name" "$ROOT/runtime/current"
 
-# 原子替换 CLI：先解压并校验，再 rename；失败时保留旧 cli
-rm -rf "$ROOT/cli.next" "$ROOT/cli.bak"
+# 原子替换 CLI：先解压并校验，再 rename。cli 不在时 cli.bak 是唯一还能启动的副本，不能先删。
+rm -rf "$ROOT/cli.next"
 mkdir -p "$ROOT/cli.next"
-tar -xzf "$tmpdir/sdkvm.tgz" -C "$ROOT/cli.next"
+tar -xzf "$tmpdir/sdkvm.tgz" -C "$ROOT/cli.next" --exclude '*..*'
 if [ ! -f "$ROOT/cli.next/package/package.json" ]; then
   echo "sdkvm: release archive missing package/package.json" >&2
   rm -rf "$ROOT/cli.next"
   exit 1
 fi
 if [ -e "$ROOT/cli" ]; then
+  rm -rf "$ROOT/cli.bak"
   mv "$ROOT/cli" "$ROOT/cli.bak"
 fi
 if ! mv "$ROOT/cli.next/package" "$ROOT/cli"; then
@@ -303,11 +315,27 @@ ensure_path_rc() {
   # 每一步都必须显式检查，绝不能在失败时把 $rc 截断重写
   tmp=$(mktemp) || return 1
   if [ -f "$rc" ]; then
+    # 结束标记缺失或带空白时只删起始行，禁止从 begin 跳到文件尾
     awk -v b="$begin" -v e="$end" '
-      { sub(/\r$/, "") }
-      $0 == b { skip=1; next }
-      skip && $0 == e { skip=0; next }
-      !skip { print }
+      { sub(/\r$/, ""); lines[++n] = $0 }
+      END {
+        i = 1
+        while (i <= n) {
+          line = lines[i]
+          gsub(/^[ \t]+|[ \t]+$/, "", line)
+          if (line != b) { print lines[i]; i++; continue }
+          j = i + 1
+          found = 0
+          while (j <= n) {
+            t = lines[j]
+            gsub(/^[ \t]+|[ \t]+$/, "", t)
+            if (t == e) { found = 1; break }
+            j++
+          }
+          if (found) i = j + 1
+          else i++
+        }
+      }
     ' "$rc" > "$tmp" || { rm -f "$tmp"; return 1; }
   else
     : > "$tmp" || { rm -f "$tmp"; return 1; }

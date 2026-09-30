@@ -58,7 +58,7 @@ export function envProxyFor(kind: 'http' | 'https'): string | undefined {
     if (/^socks/i.test(value)) {
       if (!warnedSocksProxy) {
         warnedSocksProxy = true;
-        log.warn(`${key}=${value} is a SOCKS proxy, which undici does not support; it is ignored (connecting per the remaining proxy settings)`);
+        log.warn(`${key}=${redactProxy(value)} is a SOCKS proxy, which undici does not support; it is ignored (connecting per the remaining proxy settings)`);
       }
       continue;
     }
@@ -68,6 +68,18 @@ export function envProxyFor(kind: 'http' | 'https'): string | undefined {
 }
 
 let warnedSocksProxy = false;
+
+/** 日志里不带账号密码。解析失败时只去掉 userinfo。 */
+function redactProxy(value: string): string {
+  try {
+    const url = new URL(value);
+    url.username = '';
+    url.password = '';
+    return url.href;
+  } catch {
+    return value.replace(/\/\/[^/@]+@/, '//');
+  }
+}
 
 let proxyAgent: EnvHttpProxyAgent | null | undefined;
 
@@ -145,7 +157,19 @@ async function fetchOnce(url: string, init: RequestInit): Promise<Response> {
   // 预算：fetch 返回即停表。AbortSignal.timeout 会跟着请求走到底，慢速大响应体
   // 会在 30s 处被整体掐断（元数据 API 常见），body 阶段交给 withReadBudget。
   if (init.signal) {
-    return go(init.signal);
+    // 调用方的 signal 管正文空闲（下载在响应头之后才武装）。
+    // 这里再加每次尝试的连接预算，避免首包一直不来时挂死，也不把 429 退避算进空闲时间。
+    const connect = new AbortController();
+    const connectTimer = setTimeout(
+      () => connect.abort(new Error(`no response within ${CONNECT_TIMEOUT_MS / 1000}s`)),
+      CONNECT_TIMEOUT_MS,
+    );
+    const signal = AbortSignal.any([init.signal, connect.signal]);
+    try {
+      return await go(signal);
+    } finally {
+      clearTimeout(connectTimer);
+    }
   }
   const ac = new AbortController();
   const timer = setTimeout(

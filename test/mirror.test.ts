@@ -143,6 +143,13 @@ describe('applyMirror nodejs', () => {
     };
   }
 
+  it('keeps $& in the mirror root as literal text', () => {
+    const out = applyMirror(nodeArtifact(), lin, 'https://example.com/$&/node');
+    expect(out.downloadUrl).toBe(
+      'https://example.com/$&/node/v22.20.0/node-v22.20.0-linux-x64.tar.xz',
+    );
+  });
+
   it('rewrites nodejs.org/dist prefix to mirror root', () => {
     const out = applyMirror(nodeArtifact(), lin, 'https://mirror.nju.edu.cn/nodejs-release');
     expect(out.downloadUrl).toBe(

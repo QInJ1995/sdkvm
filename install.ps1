@@ -8,6 +8,7 @@ $ProgressPreference = 'SilentlyContinue'   # PS 5.x 的 IWR 进度条会拖慢�
 
 $RuntimeNode = if ($env:SDKVM_RUNTIME_NODE) { $env:SDKVM_RUNTIME_NODE } else { '22.20.0' }
 $NodeDist = if ($env:SDKVM_NODE_DIST) { $env:SDKVM_NODE_DIST.TrimEnd('/') } else { 'https://nodejs.org/dist' }
+$OfficialNodeDist = 'https://nodejs.org/dist'
 $ReleaseBase = if ($env:SDKVM_RELEASE_BASE) { $env:SDKVM_RELEASE_BASE.TrimEnd('/') } else { 'https://github.com/QInJ1995/sdkvm/releases' }
 $Root = if ($env:SDKVM_HOME) { $env:SDKVM_HOME } else { Join-Path $env:USERPROFILE '.sdkvm' }
 $BinDir = Join-Path $Root 'bin'
@@ -98,6 +99,41 @@ function Touch-Lock {
   try { (Get-Item -LiteralPath $lockDir -Force).LastWriteTimeUtc = [DateTime]::UtcNow } catch {}
 }
 
+function Test-PidAlive([int]$procId) {
+  if ($procId -le 0) { return $false }
+  try {
+    [void][System.Diagnostics.Process]::GetProcessById($procId)
+    return $true
+  } catch [System.ArgumentException] {
+    return $false
+  } catch {
+    # 拒绝访问：进程还在，不能当死进程偷锁
+    return $true
+  }
+}
+
+$script:HbJob = $null
+function Start-LockHeartbeat {
+  $script:HbJob = Start-Job -ArgumentList $lockDir, $PID -ScriptBlock {
+    param($dir, $owner)
+    while ($true) {
+      Start-Sleep -Seconds 60
+      try {
+        $info = Get-Content -LiteralPath (Join-Path $dir 'info.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ([int]$info.pid -ne [int]$owner) { break }
+        (Get-Item -LiteralPath $dir -Force).LastWriteTimeUtc = [DateTime]::UtcNow
+      } catch { break }
+    }
+  }
+}
+function Stop-LockHeartbeat {
+  if ($null -ne $script:HbJob) {
+    Stop-Job $script:HbJob -ErrorAction SilentlyContinue
+    Remove-Job $script:HbJob -Force -ErrorAction SilentlyContinue
+    $script:HbJob = $null
+  }
+}
+
 function Lock-Acquire {
   New-Item -ItemType Directory -Force -Path $Root | Out-Null
   for ($i = 0; $i -lt 60; $i++) {
@@ -111,10 +147,7 @@ function Lock-Acquire {
     }
     if ($created) { $script:LockHeld = $true; return }
     $holder = Read-LockHolder
-    $alive = $false
-    if ($holder -gt 0) {
-      try { Get-Process -Id $holder -ErrorAction Stop | Out-Null; $alive = $true } catch {}
-    }
+    $alive = Test-PidAlive $holder
     if (-not $alive) {
       $orphanStale = $false
       if ($holder -eq 0) {
@@ -138,17 +171,34 @@ function Lock-Acquire {
 
 function Lock-Release {
   if (-not $script:LockHeld) { return }
-  # 只删自己的锁：临界区超过 5 分钟时 CLI 可能已按 stale 偷走转手，无条件删会误删新持有者
-  if ((Read-LockHolder) -eq $PID) {
-    Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue
-  }
   $script:LockHeld = $false
+  Stop-LockHeartbeat
+  # 先 rename 再核对 pid，避免删掉别人刚偷走并重建的锁
+  $staging = "$lockDir.rel-$PID"
+  if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue }
+  $moved = $false
+  try {
+    Move-Item -LiteralPath $lockDir -Destination $staging -ErrorAction Stop
+    $moved = $true
+  } catch {}
+  if (-not $moved) { return }
+  $owner = 0
+  try {
+    $info = Get-Content -LiteralPath (Join-Path $staging 'info.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($null -ne $info.pid) { $owner = [int]$info.pid }
+  } catch {}
+  if ($owner -eq $PID) {
+    Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
+  } else {
+    try { Move-Item -LiteralPath $staging -Destination $lockDir -ErrorAction Stop } catch {}
+  }
 }
 
 try {
   Write-Host "sdkvm: downloading Node.js $RuntimeNode (windows/$arch)"
   Get-Url "$NodeDist/v$RuntimeNode/$nodeArchive" (Join-Path $tmpdir $nodeArchive)
-  Get-Url "$NodeDist/v$RuntimeNode/SHASUMS256.txt" (Join-Path $tmpdir 'SHASUMS256.txt')
+  # 校验和固定走 nodejs.org，不跟 SDKVM_NODE_DIST 镜像走
+  Get-Url "$OfficialNodeDist/v$RuntimeNode/SHASUMS256.txt" (Join-Path $tmpdir 'SHASUMS256.txt')
   $expected = Get-ExpectedHash (Join-Path $tmpdir 'SHASUMS256.txt') $nodeArchive
   $actual = Get-FileSha256 (Join-Path $tmpdir $nodeArchive)
   if (-not $expected -or $expected -ne $actual) { throw 'sdkvm: Node.js checksum mismatch' }
@@ -166,6 +216,7 @@ try {
 
   # 下载/校验都在锁外（只写 tmpdir），从这里开始改 $Root 才持锁
   Lock-Acquire
+  Start-LockHeartbeat
 
   New-Item -ItemType Directory -Force -Path (Join-Path $Root 'runtime'), $BinDir | Out-Null
   $runtimeDir = Join-Path $Root 'runtime'
@@ -175,7 +226,7 @@ try {
   if (Test-Path $runtimeNext) { Remove-Item -Recurse -Force $runtimeNext }
   New-Item -ItemType Directory -Path $runtimeNext | Out-Null
   # PS 5.1 里原生命令非零退出不触发 $ErrorActionPreference，必须显式查 $LASTEXITCODE
-  tar -xf (Join-Path $tmpdir $nodeArchive) -C $runtimeNext
+  tar -xf (Join-Path $tmpdir $nodeArchive) -C $runtimeNext --exclude '*..*'
   if ($LASTEXITCODE -ne 0) {
     Remove-Item -Recurse -Force $runtimeNext -ErrorAction SilentlyContinue
     throw "sdkvm: failed to extract the Node.js archive (tar exit $LASTEXITCODE)"
@@ -203,16 +254,19 @@ try {
   $bak = Join-Path $Root 'cli.bak'
   $cli = Join-Path $Root 'cli'
   if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
-  if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
   New-Item -ItemType Directory -Path $staging | Out-Null
-  tar -xf (Join-Path $tmpdir 'sdkvm.tgz') -C $staging
+  tar -xf (Join-Path $tmpdir 'sdkvm.tgz') -C $staging --exclude '*..*'
   if ($LASTEXITCODE -ne 0) { throw "sdkvm: failed to extract the CLI archive (tar exit $LASTEXITCODE)" }
   $unpacked = Join-Path $staging 'package'
   if (-not (Test-Path (Join-Path $unpacked 'package.json'))) {
     Remove-Item -Recurse -Force $staging
     throw 'sdkvm: release archive missing package/package.json'
   }
-  if (Test-Path $cli) { Move-Item $cli $bak }
+  # cli 不在时 bak 是唯一还能启动的副本，校验通过之前不能删
+  if (Test-Path $cli) {
+    if (Test-Path $bak) { Remove-Item -Recurse -Force $bak }
+    Move-Item $cli $bak
+  }
   try {
     Move-Item $unpacked $cli
   } catch {

@@ -266,6 +266,15 @@ describe('assertContained', () => {
     );
   });
 
+  it.skipIf(process.platform !== 'win32')('rejects a junction pointing outside', () => {
+    const dir = path.join(work, 'junction-tree');
+    const outside = path.join(work, 'junction-outside');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.symlinkSync(outside, path.join(dir, 'escape'), 'junction');
+    expect(() => assertContained(dir, dir)).toThrow(/symlink points outside/);
+  });
+
   it.skipIf(process.platform === 'win32')('rejects symlinks pointing outside', () => {
     const dir = path.join(work, 'bad-tree');
     fs.mkdirSync(dir, { recursive: true });

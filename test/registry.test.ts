@@ -41,6 +41,21 @@ describe('registry', () => {
     expect(list[0]?.version.vendor).toBe('temurin');
   });
 
+  it('settled incomplete marker still lists the install; an in-progress marker hides it', () => {
+    const settled = path.join(home, 'jdks', 'temurin-21.0.5+11');
+    mkJdk('temurin-21.0.5+11');
+    fs.writeFileSync(
+      `${settled}.incomplete`,
+      JSON.stringify({ startedAt: 1, replacing: false, mode: 'archive', settled: true }),
+    );
+    expect(listInstalled('java').map((j) => j.version.major)).toEqual([21]);
+
+    const pending = path.join(home, 'jdks', 'temurin-17.0.13+11');
+    mkJdk('temurin-17.0.13+11');
+    fs.writeFileSync(`${pending}.incomplete`, JSON.stringify({ startedAt: 1, replacing: false, mode: 'archive' }));
+    expect(listInstalled('java').map((j) => j.version.major)).toEqual([21]);
+  });
+
   it('ignores non-jdk dirs', () => {
     mkJdk('temurin-21.0.5+11');
     fs.mkdirSync(path.join(home, 'jdks', 'random'));

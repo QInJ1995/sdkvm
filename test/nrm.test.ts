@@ -161,10 +161,12 @@ describe('nrm add / del', () => {
     expect(() => nrmAdd('ok', 'not-a-url')).toThrow(/Invalid URL/);
   });
 
-  it('add preserves query string and trims whitespace', () => {
+  it('add rejects a query string or fragment and still trims a plain URL', () => {
+    expect(() => nrmAdd('corp', '  http://xxx/registry?token=1  ')).toThrow(/query string or fragment/);
+    expect(() => nrmAdd('corp', 'http://xxx/registry#frag')).toThrow(/query string or fragment/);
     vi.spyOn(log, 'ok').mockImplementation(() => {});
-    nrmAdd('corp', '  http://xxx/registry?token=1  ');
-    expect(loadConfig().npmRegistries.corp).toBe('http://xxx/registry/?token=1');
+    nrmAdd('corp', '  http://xxx/registry  ');
+    expect(loadConfig().npmRegistries.corp).toBe('http://xxx/registry/');
   });
 
   it('add updates same name ignoring case without duplicating keys', () => {

@@ -140,6 +140,44 @@ export function upsertRcContent(content: string, type: SdkTypeId, blockText?: st
   return `${stripped}${eol}${eol}${block}${eol}`;
 }
 
+/** 不同 SDKVM_HOME 的锁互不相干，却可能写同一份 rc。用目标文件旁的目录锁串行化读-改-写。 */
+function withRcFileLock(file: string, fn: () => void): void {
+  const lockDir = `${file}.sdkvm-lock`;
+  // 锁目录和 rc 在同一层。fish 的 ~/.config/fish 第一次 use 时还不存在。
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const deadline = Date.now() + 10_000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      try {
+        if (Date.now() - fs.statSync(lockDir).mtimeMs > 30_000) {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting to update ${file}`);
+      }
+      Atomics.wait(pause, 0, 0, 50);
+    }
+  }
+  try {
+    fn();
+  } finally {
+    try {
+      fs.rmSync(lockDir, { recursive: true, force: true });
+    } catch {
+      // 残留锁按 30 秒龄被下一次接管
+    }
+  }
+}
+
 /** 原子写 rc：tmp+rename，避免 O_TRUNC 直接写在写一半崩溃时截断用户文件 */
 function writeRcAtomic(file: string, content: string): void {
   // rc 常被 chezmoi/stow 等做成符号链接：rename 会把链接替换成普通文件，
@@ -171,6 +209,10 @@ function writeRcAtomic(file: string, content: string): void {
 
 /** 写入 rc 文件（不存在则创建）。非 UTF-8 内容先备份，避免替换字符写回造成永久破坏 */
 export function upsertRcFile(file: string, type: SdkTypeId, blockText?: string): void {
+  withRcFileLock(file, () => upsertRcFileUnlocked(file, type, blockText));
+}
+
+function upsertRcFileUnlocked(file: string, type: SdkTypeId, blockText?: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!fs.existsSync(file)) {
     // 首次创建同样走 tmp+rename：writeFileSync 写到一半崩溃会留下半截 rc，
@@ -189,6 +231,10 @@ export function upsertRcFile(file: string, type: SdkTypeId, blockText?: string):
 }
 
 export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {
+  withRcFileLock(file, () => removeRcBlockFromFileUnlocked(file, type));
+}
+
+function removeRcBlockFromFileUnlocked(file: string, type: SdkTypeId): void {
   if (!fs.existsSync(file)) return;
   const raw = fs.readFileSync(file);
   const content = raw.toString('utf8');

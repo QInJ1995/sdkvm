@@ -858,8 +858,8 @@ CLI 后请对已启用的 SDK 重新执行一次 `use`,并删除用户环境里�
 
 ### fish 或 nushell
 
-自动写入只支持 zsh 与 bash。检测不到 rc 文件时,`use` 会打印可直接粘贴的
-配置块——`$SHELL` 指向 fish 时自动给出 fish 语法。手动改写请参考[版本切换](#版本切换)中的块。fish 示例:
+`$SHELL` 以 `fish` 结尾时,`use` 会把配置写进 `~/.config/fish/config.fish`。
+nushell 不自动写文件,`use` 会打印可直接粘贴的块。手动改写请参考[版本切换](#版本切换)中的块。fish 示例:
 
 ```fish
 set -gx JAVA_HOME $HOME/.sdkvm/current-java

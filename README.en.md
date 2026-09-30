@@ -946,10 +946,9 @@ remove leftover old variable names from the user environment (Windows registry
 
 ### fish or nushell
 
-Automatic rc writes support zsh and bash only. When no rc file can be
-detected, `use` prints a paste-ready block — in fish syntax when `$SHELL`
-points at fish. To translate the blocks in [Switching](#switching) yourself,
-use this fish example:
+When `$SHELL` ends in `fish`, `use` writes `~/.config/fish/config.fish`.
+nushell is not written automatically; `use` prints a paste-ready block instead.
+To translate the blocks in [Switching](#switching) yourself, use this fish example:
 
 ```fish
 set -gx JAVA_HOME $HOME/.sdkvm/current-java

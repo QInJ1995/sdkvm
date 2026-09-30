@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recoverInterruptedInstalls, sweepStaleParts, sweepStaleTmp } from '../src/cli/install.js';
+import { detectPlatform } from '../src/core/platform.js';
 
 let home: string;
 
@@ -166,6 +167,23 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
     recoverInterruptedInstalls('go');
 
     expect(fs.readFileSync(path.join(dir, 'go.bin'), 'utf8')).toBe('new');
+    expect(fs.existsSync(bak)).toBe(false);
+    expect(fs.existsSync(`${dir}.incomplete`)).toBe(false);
+  });
+
+  it('installer 模式 + 可执行文件已就位：保留新装、丢 bak', () => {
+    const dir = goDir('golang-1.24.5');
+    const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
+    const bin = path.join(dir, 'bin', binName);
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, 'new');
+    const bak = goDir('golang-1.24.5.bak');
+    fs.writeFileSync(path.join(bak, 'go.bin'), 'old');
+    writeMarker(dir, JSON.stringify({ startedAt: 1, replacing: true, mode: 'installer' }));
+
+    recoverInterruptedInstalls('go');
+
+    expect(fs.readFileSync(bin, 'utf8')).toBe('new');
     expect(fs.existsSync(bak)).toBe(false);
     expect(fs.existsSync(`${dir}.incomplete`)).toBe(false);
   });

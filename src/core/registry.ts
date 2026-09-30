@@ -17,6 +17,18 @@ export interface InstalledSdk {
   home: string;
 }
 
+/** 进行中的半成品对 registry 不可见。settled 表示安装已完成，只是标记文件删不掉。 */
+function incompleteHidesInstall(dirPath: string): boolean {
+  const marker = `${dirPath}.incomplete`;
+  if (!fs.existsSync(marker)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(marker, 'utf8')) as { settled?: unknown };
+    return parsed?.settled !== true;
+  } catch {
+    return true;
+  }
+}
+
 /** 扫描安装根目录（如 ~/.sdkvm/jdks/），按版本升序 */
 export function listInstalled(type: SdkTypeId): InstalledSdk[] {
   const spec = getSdkType(type);
@@ -32,8 +44,8 @@ export function listInstalled(type: SdkTypeId): InstalledSdk[] {
     } catch {
       continue; // 扫描期间被并发卸载删除
     }
-    // 被硬中断（kill -9/断电）的 sh/exe 安装半成品：install 会按标记恢复/清理，这里不可见
-    if (fs.existsSync(`${dirPath}.incomplete`)) continue;
+    // 进行中的 .incomplete 是半成品，不可见。settled:true 表示安装已成功、只是标记删不掉。
+    if (incompleteHidesInstall(dirPath)) continue;
     result.push({ type, version, dirPath, home: spec.locateHome(dirPath) });
   }
   // 版本相同的两条（java 跨 vendor 并存）用 vendor 名决出确定序，

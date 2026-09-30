@@ -1,10 +1,17 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor } from './types.js';
 import type { VendorPlatform } from './types.js';
+import { hostLibc } from '../core/platform.js';
 import { HttpError, httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { formatVersion, parseVersion, type SdkVersion } from '../core/version.js';
 
 const API = 'https://api.adoptium.net';
+
+/** Adoptium 的 musl 构建 os 名是 alpine-linux，不是 linux。glibc 主机仍用 linux。 */
+export function adoptiumOs(platform: VendorPlatform): string {
+  if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') return 'alpine-linux';
+  return platform.os;
+}
 
 interface AvailableReleases {
   available_releases: number[];
@@ -107,6 +114,21 @@ function githubAssetUrl(version: string, os: string, arch: string): string {
   return `https://github.com/adoptium/temurin${major}-binaries/releases/download/jdk-${encodeURIComponent(version)}/${file}`;
 }
 
+/** 精确版本的官方哈希走 Adoptium API，不走 GitHub `.json`（镜像环境下 GitHub 经常不可达）。 */
+function releaseChecksumUrl(version: string, os: string, arch: string): string {
+  const v = parseVersion('temurin', version);
+  const legacy = jdk8LegacyNames(v);
+  const release = legacy ? legacy.tag : `jdk-${version}`;
+  const q = new URLSearchParams({
+    os,
+    architecture: arch,
+    image_type: 'jdk',
+    project: 'jdk',
+    vendor: 'eclipse',
+  });
+  return `${API}/v3/assets/release_name/${encodeURIComponent(release)}?${q}`;
+}
+
 async function fetchAvailable(): Promise<AvailableReleases> {
   const data = await httpJson<unknown>(`${API}/v3/info/available_releases`);
   if (
@@ -121,7 +143,8 @@ async function fetchAvailable(): Promise<AvailableReleases> {
 }
 
 async function resolveMajor(major: number, platform: VendorPlatform): Promise<ResolvedArtifact> {
-  const { downloadUrl, sha256 } = await resolveLatestAsset(major, platform.os, platform.arch);
+  const osName = adoptiumOs(platform);
+  const { downloadUrl, sha256 } = await resolveLatestAsset(major, osName, platform.arch);
   const version = versionFromGithubUrl(downloadUrl);
   return buildArtifact(version, platform, downloadUrl, sha256);
 }
@@ -131,6 +154,7 @@ function buildArtifact(
   platform: VendorPlatform,
   downloadUrl: string,
   expectedSha?: string | null,
+  checksumUrl?: string,
 ): ResolvedArtifact {
   const v = parseVersion('temurin', version);
   const archive = platform.os === 'windows' ? 'zip' : 'tar.gz';
@@ -140,10 +164,10 @@ function buildArtifact(
     dirName: `temurin-${formatVersion(v)}`,
     displayName: `Temurin ${formatVersion(v)}`,
     downloadUrl,
-    // 预取到 API 哈希时直接用；否则回退 GitHub `.json` 旁路（full 规格路径）
+    // 预取到 API 哈希时直接用。精确版本走 release_name API；没给 checksumUrl 才退回旁路 `.json`。
     checksum: expectedSha
       ? { kind: 'sha256', expected: expectedSha }
-      : { kind: 'sha256', url: `${downloadUrl}.json` },
+      : { kind: 'sha256', url: checksumUrl ?? `${downloadUrl}.json` },
     archive,
   };
 }
@@ -179,8 +203,10 @@ export const temurinVendor: Vendor = {
       // java 语法不会产出 line/latest（go 专用），防御性拒绝
       throw new SdkvmError(`Unsupported version spec for Temurin: ${spec.kind}`);
     }
-    // 精确版本：直接构造 GitHub asset URL（assets/version 端点已废弃，404 由下载环节报错）
-    const url = githubAssetUrl(spec.version, platform.os, platform.arch);
-    return buildArtifact(spec.version, platform, url);
+    // 精确版本：直接构造 GitHub asset URL（assets/version 端点已废弃，404 由下载环节报错）。
+    // 哈希走 release_name API，镜像模式下不再依赖 GitHub 旁路 `.json`。
+    const osName = adoptiumOs(platform);
+    const url = githubAssetUrl(spec.version, osName, platform.arch);
+    return buildArtifact(spec.version, platform, url, null, releaseChecksumUrl(spec.version, osName, platform.arch));
   },
 };

@@ -281,10 +281,11 @@ export async function upgradeCommand(): Promise<void> {
   if (!expected) {
     throw new SdkvmError(`No checksum for ${RELEASE_ASSET}`, { hint: sumsUrl });
   }
-  fs.mkdirSync(paths.cache(), { recursive: true });
+  fs.mkdirSync(paths.tmp(), { recursive: true });
   // 顺手清掉历史下载残留（kill -9 留下的 .part 永远不会再被复用）
   sweepStaleParts();
-  const dest = path.join(paths.cache(), RELEASE_ASSET);
+  // 带 pid：两个 upgrade 同时下载时不再互相覆盖、互相删除同一份 cache/sdkvm.tgz
+  const dest = path.join(paths.tmp(), `sdkvm-upgrade-${process.pid}.tgz`);
   try {
     const downloaded = await downloadFile(assetUrl, dest);
     if (downloaded.sha256 !== expected) {
@@ -295,6 +296,12 @@ export async function upgradeCommand(): Promise<void> {
     await withLock(async () => {
       const before = getVersion();
       const home = sdkvmHome();
+      const pending = path.join(home, 'upgrade-apply.cmd');
+      if (process.platform === 'win32' && fs.existsSync(pending)) {
+        throw new SdkvmError('a Windows upgrade is already scheduled', {
+          hint: `Wait for ${pending} to finish. If that upgrade is stuck, delete the script and run sdkvm upgrade again.`,
+        });
+      }
       // 统一先解压到 cli.next 并读出新版本：相同版本直接收工，不再空换一轮目录
       // （Windows 还省掉一次"计划升级"的误导提示）
       const staged = await prepareCliPackage(dest, home);

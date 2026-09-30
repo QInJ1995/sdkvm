@@ -31,14 +31,28 @@ function broadcastPs(): string[] {
   ];
 }
 
-/** 写用户级环境变量为 REG_EXPAND_SZ 并广播。
- * 值含 %USERPROFILE% 引用，必须 REG_EXPAND_SZ 才会在登录/广播时展开——setx 会把类型写成 REG_SZ，弃用。 */
+/**
+ * REG_EXPAND_SZ 会展开值里每一个 %NAME%。
+ * 只保留前导的 %VAR%（%USERPROFILE%、%JAVA_HOME% 等），路径其余部分的 % 写成 %%。
+ * 没有环境变量引用的绝对路径用 REG_SZ，百分号保持字面量。
+ */
+export function registryEnvValue(value: string): { data: string; expand: boolean } {
+  const lead = /^%([A-Za-z_][A-Za-z0-9_]*)%(.*)$/.exec(value);
+  if (!lead?.[1]) return { data: value, expand: false };
+  return { data: `%${lead[1]}%${(lead[2] ?? '').replace(/%/g, '%%')}`, expand: true };
+}
+
+/** 写用户级环境变量并广播。含 %VAR% 时用 REG_EXPAND_SZ，否则 REG_SZ。 */
 export async function setEnvWin(name: string, value: string): Promise<void> {
-  const escaped = value.replace(/'/g, "''");
+  const stored = registryEnvValue(value);
+  const escaped = stored.data.replace(/'/g, "''");
+  const kind = stored.expand
+    ? '[Microsoft.Win32.RegistryValueKind]::ExpandString'
+    : '[Microsoft.Win32.RegistryValueKind]::String';
   const ps = [
     "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
     "if(-not $k){ throw 'no Environment key' }",
-    `$k.SetValue('${name.replace(/'/g, "''")}', '${escaped}', [Microsoft.Win32.RegistryValueKind]::ExpandString)`,
+    `$k.SetValue('${name.replace(/'/g, "''")}', '${escaped}', ${kind})`,
     ...broadcastPs(),
   ].join('\n');
   await run('powershell.exe', encoded(ps));
@@ -58,6 +72,7 @@ export async function setSdkEnvWin(type: SdkTypeId): Promise<void> {
  * %JAVA_HOME%\bin 在 REG_SZ 里也永不展开；升级为 REG_EXPAND_SZ 对无 % 的既有条目无影响。
  */
 export async function ensureUserPathWin(entry: string): Promise<void> {
+  const stored = registryEnvValue(entry).data.replace(/'/g, "''");
   const ps = [
     "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
     "if(-not $k){ throw 'no Environment key' }",
@@ -66,8 +81,8 @@ export async function ensureUserPathWin(entry: string): Promise<void> {
     "$parts=@($raw -split ';' | Where-Object { $_ -ne '' })",
     // 比较前先 Trim：regedit 等手工编辑过的条目常带首尾空白，精确比较会让
     // 同一条目被判定为"不存在"而重复追加
-    `if(@($parts | ForEach-Object { $_.Trim() }) -notcontains '${entry.replace(/'/g, "''")}'){`,
-    `  $parts += '${entry.replace(/'/g, "''")}'`,
+    `if(@($parts | ForEach-Object { $_.Trim() }) -notcontains '${stored}'){`,
+    `  $parts += '${stored}'`,
     "  $k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     "}",
     ...broadcastPs(),
@@ -77,7 +92,8 @@ export async function ensureUserPathWin(entry: string): Promise<void> {
 
 /** 卸载辅助：从用户 PATH 移除 entry（Path 不存在或不含 entry 时不动注册表）。 */
 export async function removeFromUserPathWin(entry: string): Promise<void> {
-  const escaped = entry.replace(/'/g, "''");
+  const stored = registryEnvValue(entry).data.replace(/'/g, "''");
+  const raw = entry.replace(/'/g, "''");
   const ps = [
     "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
     "if(-not $k){ exit 0 }",
@@ -88,8 +104,8 @@ export async function removeFromUserPathWin(entry: string): Promise<void> {
     // 不含 entry 时直接退出：重写同样的值再广播 WM_SETTINGCHANGE 没有意义。
     // 比较前先 Trim：regedit 手工编辑过的条目常带首尾空白，精确比较会漏掉
     // 该删的条目，卸载后 PATH 里残留指向已删链接的空引用
-    `if(-not ($parts | Where-Object { $_.Trim() -eq '${escaped}' })){ exit 0 }`,
-    `$parts=@($parts | Where-Object { $_.Trim() -ne '${escaped}' })`,
+    `if(-not ($parts | Where-Object { $_.Trim() -eq '${stored}' -or $_.Trim() -eq '${raw}' })){ exit 0 }`,
+    `$parts=@($parts | Where-Object { $_.Trim() -ne '${stored}' -and $_.Trim() -ne '${raw}' })`,
     "$k.SetValue('Path', ($parts -join ';'), [Microsoft.Win32.RegistryValueKind]::ExpandString)",
     ...broadcastPs(),
   ].join('\n');
