@@ -65,6 +65,24 @@ function checksumFromJson(value: unknown): string | null {
   return null;
 }
 
+/** release 说明把哈希写在文件名后面。只认文件名之后的第一段 sha256，避开更长的相邻文件名。 */
+function sha256NearFilename(text: string, filename: string): string | null {
+  let from = 0;
+  while (from < text.length) {
+    const at = text.indexOf(filename, from);
+    if (at < 0) return null;
+    const before = text[at - 1] ?? '';
+    const after = text[at + filename.length] ?? '';
+    const bounded = (ch: string) => ch === '' || !/[A-Za-z0-9._-]/.test(ch);
+    if (bounded(before) && bounded(after)) {
+      const hash = /[0-9a-f]{64}/i.exec(text.slice(at, at + filename.length + 500));
+      if (hash?.[0]) return hash[0].toLowerCase();
+    }
+    from = at + filename.length;
+  }
+  return null;
+}
+
 /**
  * 解析一行 `sha256sum` 输出。文本模式是 `hash  file`，二进制模式是 `hash *file`。
  * 星号属于模式标记，不是文件名。
@@ -95,8 +113,18 @@ export function extractExpectedChecksum(
   const trimmed = text.trim();
   if (kind === 'sha256' && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
     try {
-      const hit = checksumFromJson(JSON.parse(trimmed));
+      const parsed = JSON.parse(trimmed) as unknown;
+      const hit = checksumFromJson(parsed);
       if (hit) return hit;
+      // Corretto 精确版本：GitHub release JSON 的 body 在对应文件名后给出 sha256
+      const body =
+        artifactName && parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as { body?: unknown }).body
+          : undefined;
+      if (artifactName && typeof body === 'string') {
+        const near = sha256NearFilename(body, artifactName);
+        if (near) return near;
+      }
     } catch {
       // 非法 JSON 视为无校验
     }

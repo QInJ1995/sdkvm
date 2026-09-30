@@ -52,6 +52,19 @@ describe('extractExpectedChecksum', () => {
     ).toBe(hash);
   });
 
+  it('reads the sha256 published next to an artifact name in a release body', () => {
+    const name = 'amazon-corretto-21.0.4.7.1-linux-x64.tar.gz';
+    const sha = 'ab'.repeat(32);
+    const decoy = 'cd'.repeat(32);
+    const body = [
+      `|[amazon-corretto-debugsymbols-21.0.4.7.1-linux-x64.tar.gz](https://example.com/debug.tar.gz)|\`${'e'.repeat(32)}\` / \`${decoy}\`|`,
+      `|[${name}](https://example.com/${name})|\`${'f'.repeat(32)}\` /<br /> \`${sha}\`|`,
+      `|[${name}.sig](https://example.com/${name}.sig)|\`${'1'.repeat(32)}\` / \`${'9'.repeat(64)}\`|`,
+    ].join('\n');
+    expect(extractExpectedChecksum(JSON.stringify({ body }), 'sha256', name)).toBe(sha);
+    expect(extractExpectedChecksum(JSON.stringify({ body }))).toBeNull();
+  });
+
   it('reads a SHA-256 entry from the legacy hashes array', () => {
     expect(
       extractExpectedChecksum(

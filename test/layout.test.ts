@@ -156,6 +156,25 @@ describe('extract + normalize', () => {
     expect(fs.existsSync(path.join(home, 'bin', 'java'))).toBe(true);
   });
 
+  it('older Zulu macOS layout: Contents/Home sits inside zulu-*.jdk', () => {
+    const dest = path.join(work, 'out-zulu-jdk');
+    const homeBin = path.join(
+      dest,
+      'zulu21.36.17-ca-jdk21.0.4-macosx_aarch64',
+      'zulu-21.jdk',
+      'Contents',
+      'Home',
+      'bin',
+    );
+    fs.mkdirSync(homeBin, { recursive: true });
+    fs.writeFileSync(path.join(homeBin, 'java'), '#!/bin/sh\n');
+    fs.writeFileSync(path.join(dest, 'DISCLAIMER'), 'zulu\n');
+    const { root, home } = normalizeExtracted(dest, MAC, 'java');
+    expect(path.basename(root)).toBe('zulu21.36.17-ca-jdk21.0.4-macosx_aarch64');
+    expect(home.endsWith(path.join('zulu-21.jdk', 'Contents', 'Home'))).toBe(true);
+    expect(fs.existsSync(path.join(home, 'bin', 'java'))).toBe(true);
+  });
+
   it('plain linux layout', async () => {
     const src = path.join(work, 'src-lin');
     fs.mkdirSync(path.join(src, 'jdk-21.0.5', 'bin'), { recursive: true });

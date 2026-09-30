@@ -50,6 +50,14 @@ export function rcBlock(type: SdkTypeId): string {
   ].join('\n');
 }
 
+/**
+ * fish 单引号里只有 `\'` 和 `\\` 有意义。
+ * bash/zsh 的 `'\''` 拼接写进 config.fish 不是合法转义。
+ */
+export function fishSingleQuote(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+}
+
 /** 标记块内容（fish 语法）：set -gx + fish_add_path 自带幂等，无需 case 守卫 */
 export function rcBlockFish(type: SdkTypeId): string {
   const spec = getSdkType(type);
@@ -68,7 +76,7 @@ export function rcBlockFish(type: SdkTypeId): string {
       : [];
   return [
     rcBegin(type),
-    `set -gx ${spec.envVar} '${toPosix(abs).replace(/'/g, "'\\''")}'`,
+    `set -gx ${spec.envVar} ${fishSingleQuote(toPosix(abs))}`,
     // fish_add_path 是 3.2+ 才有：更老的 fish 里静默失败，PATH 不生效也不报错。
     // 退回 contains + set -gx（全部版本可用，幂等）
     'if type -q fish_add_path',

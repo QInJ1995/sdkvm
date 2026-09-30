@@ -446,11 +446,12 @@ describe('corretto', () => {
     expect(collapsed.downloadUrl).toContain('amazon-corretto-8.504.01.1-macosx-aarch64.tar.gz');
   });
 
-  it('resolve full builds resource URL with per-OS naming (no checksum source)', async () => {
+  it('resolve full builds resource URL and points checksum at the official release notes', async () => {
     const mac = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, MAC);
     expect(mac.downloadUrl).toContain('amazon-corretto-21.0.4.9.1-macosx-aarch64.tar.gz');
-    // full 历史版本无公开校验旁路：诚实置 null，安装时 warn 跳过
-    expect(mac.checksum).toBeNull();
+    expect(mac.checksum && 'url' in mac.checksum ? mac.checksum.url : '').toBe(
+      'https://api.github.com/repos/corretto/corretto-21/releases/tags/21.0.4.9.1',
+    );
     const lin = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, LIN);
     expect(lin.downloadUrl).toContain('amazon-corretto-21.0.4.9.1-linux-x64.tar.gz');
     const win = await correttoVendor.resolve({ kind: 'full', version: '21.0.4.9.1' }, WIN);

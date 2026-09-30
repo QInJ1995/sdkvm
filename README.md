@@ -681,7 +681,8 @@ Miniconda 追加 `%MINICONDA_HOME%`、`%MINICONDA_HOME%\Scripts`、
   `SHASUMS256.txt`)、Miniconda、Python 校验失败立即中止;Maven 对照官方
   `.sha512`(3.8 及更早无该文件时回退 `.sha1`);Java 各发行版尽力校验——
   Temurin 与 Zulu 的哈希由官方 API 预取,Corretto `21` / `lts` 用官方
-  `latest_sha256`;Corretto 精确历史版本无公开校验源,安装时警告并跳过。
+  `latest_sha256`;Corretto 精确版本用官方 GitHub release 说明里、对应文件名旁的
+  sha256(resources 目录的 `.sha256` 旁路是 403)。说明里没有该版本时警告并跳过。
 - **强制校验**场景:配置了镜像的下载,以及 Miniconda 这类下载后要**执行**的
   安装器——拿不到任何可核对的哈希时直接失败,不降级放行。
 - 校验源只认官方:官方旁路文件(如 Temurin `.json`、Maven `.sha512`)不可达时,

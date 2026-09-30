@@ -39,6 +39,15 @@ function resourceUrl(version: string, platform: VendorPlatform): string {
   return `${BASE}/resources/${version}/${resourceFileName(version, platform)}`;
 }
 
+/**
+ * 精确版本的官方 sha256 写在 Amazon 的 GitHub release 说明里（下载链接旁的 64 位 hex）。
+ * resources 旁路 `.sha256` 是 403，不能当校验源。
+ */
+function releaseChecksumUrl(version: string): string {
+  const major = parseVersion('corretto', version).major;
+  return `https://api.github.com/repos/corretto/corretto-${major}/releases/tags/${encodeURIComponent(version)}`;
+}
+
 async function resolveLatestVersion(major: number, platform: VendorPlatform): Promise<string> {
   const url = `${BASE}/latest/${latestFileName(major, platform)}`;
   let res;
@@ -174,9 +183,14 @@ export const correttoVendor: Vendor = {
       dirName: `corretto-${formatVersion(v)}`,
       displayName: `Corretto ${formatVersion(v)}`,
       downloadUrl: url,
-      // full 历史版本无公开校验旁路（.sha256 已 403）；major/lts 用 latest_sha256 的官方值
+      // major/lts 用 latest_sha256 的官方值。精确版本走 release 说明里的 sha256；
+      // 该 tag 不存在时安装阶段警告并跳过，不再把校验直接留空。
       checksum:
-        spec.kind !== 'full' && majorSha ? { kind: 'sha256', expected: majorSha } : null,
+        spec.kind !== 'full' && majorSha
+          ? { kind: 'sha256', expected: majorSha }
+          : spec.kind === 'full'
+            ? { kind: 'sha256', url: releaseChecksumUrl(canonical) }
+            : null,
       archive: platform.os === 'windows' ? 'zip' : 'tar.gz',
     };
   },

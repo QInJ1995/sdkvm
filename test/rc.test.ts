@@ -7,6 +7,7 @@ import {
   rcEnd,
   rcBlock,
   rcBlockFish,
+  fishSingleQuote,
   removeRcBlockFromFile,
   stripRcBlock,
   upsertRcContent,
@@ -311,6 +312,16 @@ describe('rc 标记行首锚定', () => {
 });
 
 describe('fish 标记块', () => {
+  it('单引号按 fish 规则转义，不用 bash 的引号拼接', () => {
+    expect(fishSingleQuote("/tmp/o'brien")).toBe(`'/tmp/o\\'brien'`);
+    expect(fishSingleQuote(String.raw`/tmp/a\b`)).toBe(`'/tmp/a\\\\b'`);
+    process.env.SDKVM_HOME = path.join(os.tmpdir(), "o'brien");
+    const abs = path.join(path.resolve(process.env.SDKVM_HOME), 'current-java').split(path.sep).join('/');
+    const block = rcBlockFish('java');
+    expect(block).toContain(`set -gx JAVA_HOME ${fishSingleQuote(abs)}`);
+    expect(block).not.toContain(`'\\''`);
+  });
+
   it('fish_add_path 存在时优先用；老版本 fish 退回 contains + set -gx', () => {
     const block = rcBlockFish('java');
     // 3.2+ 的幂等入口

@@ -753,8 +753,10 @@ Installs, switches, removals, `upgrade`, and `mrm use` hold the exclusive
   back to the published `.sha1` for 3.8 and older); Java vendors verify
   whenever a checksum is available — Temurin and Zulu hashes are prefetched
   from the official APIs, Corretto `21` / `lts` uses the official
-  `latest_sha256`; exact historical Corretto versions have no public checksum
-  source and are installed with a warning, unverified.
+  `latest_sha256`; an exact Corretto version uses the sha256 printed next to
+  that filename in the official GitHub release notes (the `.sha256` file beside
+  the archive returns 403). If that release has no hash, install warns and skips
+  verification.
 - **Strict verification** applies to mirrored downloads and to installers that
   will be **executed** (Miniconda): if no verifiable hash can be obtained, the
   install fails rather than proceeding.
