@@ -27,9 +27,10 @@ export function rcBlock(type: SdkTypeId): string {
   const toPosix = (p: string) => p.split(path.sep).join('/');
   // 根目录在 home 之外（SDKVM_HOME 自定义，或跨盘导致 path.relative 返回绝对路径）时退回绝对 posix 路径
   const fallbackAbs = rel.startsWith('..') || path.isAbsolute(rel);
-  // 路径含 " / ` / $ 时改用单引号字面量，防止写入 rc 的 export 行被注入或意外展开；
+  // 路径含 " / ` / $ / ! / \ 时改用单引号字面量。
+  // 双引号挡不住交互 shell 的 history expansion（!）和反斜杠转义；
   // 此时也不用 $HOME/ 相对形式（单引号会关掉展开）
-  const needsLiteral = /["'$`]/.test(abs);
+  const needsLiteral = /["'`$!\\]/.test(abs);
   const link = needsLiteral
     ? `'${toPosix(abs).replace(/'/g, `'\\''`)}'`
     : fallbackAbs
@@ -71,9 +72,9 @@ export function rcBlockFish(type: SdkTypeId): string {
     // fish_add_path 是 3.2+ 才有：更老的 fish 里静默失败，PATH 不生效也不报错。
     // 退回 contains + set -gx（全部版本可用，幂等）
     'if type -q fish_add_path',
-    `  fish_add_path -p $${spec.envVar}${binSuffix}`,
-    `else if not contains $${spec.envVar}${binSuffix} $PATH`,
-    `  set -gx PATH $${spec.envVar}${binSuffix} $PATH`,
+    `  fish_add_path -p "$${spec.envVar}${binSuffix}"`,
+    `else if not contains "$${spec.envVar}${binSuffix}" $PATH`,
+    `  set -gx PATH "$${spec.envVar}${binSuffix}" $PATH`,
     'end',
     ...extra,
     rcEnd(type),
@@ -129,13 +130,13 @@ function stripBlockBetween(content: string, begin: string, end: string): string 
 }
 
 /** 确保文件末尾恰好包含一个该类型的标记块；返回最终文件内容 */
-export function upsertRcContent(content: string, type: SdkTypeId): string {
+export function upsertRcContent(content: string, type: SdkTypeId, blockText?: string): string {
   // 只裁行尾换行，不裁 \r 之外的空白（\s 会把 CRLF 文件最后的 CR 也吃掉）
   const stripped = stripRcBlock(content, type).replace(/(?:\r?\n)+\s*$/, '');
   const crlf = (content.match(/\r\n/g) ?? []).length;
   const lf = (content.match(/(?<!\r)\n/g) ?? []).length;
   const eol = crlf > lf ? '\r\n' : '\n';
-  const block = rcBlock(type).replaceAll('\n', eol);
+  const block = (blockText ?? rcBlock(type)).replaceAll('\n', eol);
   return `${stripped}${eol}${eol}${block}${eol}`;
 }
 
@@ -169,9 +170,10 @@ function writeRcAtomic(file: string, content: string): void {
 }
 
 /** 写入 rc 文件（不存在则创建）。非 UTF-8 内容先备份，避免替换字符写回造成永久破坏 */
-export function upsertRcFile(file: string, type: SdkTypeId): void {
+export function upsertRcFile(file: string, type: SdkTypeId, blockText?: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, upsertRcContent('', type));
+    fs.writeFileSync(file, upsertRcContent('', type, blockText));
     return;
   }
   const raw = fs.readFileSync(file);
@@ -181,7 +183,7 @@ export function upsertRcFile(file: string, type: SdkTypeId): void {
     fs.copyFileSync(file, bak);
     log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
   }
-  writeRcAtomic(file, upsertRcContent(content, type));
+  writeRcAtomic(file, upsertRcContent(content, type, blockText));
 }
 
 export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {

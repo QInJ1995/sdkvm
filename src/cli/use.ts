@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { detectPlatform, type Platform } from '../core/platform.js';
 import { envGet } from '../core/env.js';
@@ -83,10 +84,15 @@ export async function useCommand(
         envState.error = err instanceof Error ? err : new Error(String(err));
       }
     } else {
-      rc = detectRcFile(platform.os);
+      const fish = isFishShell();
+      // fish 的 config.fish 语法不同，不能写 bash 块。以前 detectRcFile 对 fish 返回 null，
+      // 提示却写成“无法识别 shell”，PATH 也不会自动生效
+      rc = fish
+        ? path.join(os.homedir(), '.config', 'fish', 'config.fish')
+        : detectRcFile(platform.os);
       if (rc) {
         try {
-          upsertRcFile(rc, type);
+          upsertRcFile(rc, type, fish ? rcBlockFish(type) : undefined);
         } catch (err) {
           envState.error = err instanceof Error ? err : new Error(String(err));
         }

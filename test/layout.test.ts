@@ -67,6 +67,17 @@ describe('extract + normalize', () => {
     expect(home.endsWith('jdk-21.0.5')).toBe(true);
   });
 
+  it.skipIf(process.platform === 'win32')('symlink to a directory is not treated as the archive root', () => {
+    const dest = path.join(work, 'out-symlink-root');
+    const real = path.join(work, 'real-jdk');
+    fs.mkdirSync(path.join(real, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(real, 'bin', 'java'), '#!/bin/sh\n');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.symlinkSync(real, path.join(dest, 'jdk'));
+    expect(() => normalizeExtracted(dest, LIN, 'java')).toThrow(/bin not found/);
+    expect(fs.existsSync(path.join(real, 'bin', 'java'))).toBe(true);
+  });
+
   it('invalid archive (no bin/java) throws SdkvmError', async () => {
     const src = path.join(work, 'src-bad');
     fs.mkdirSync(path.join(src, 'some-dir'), { recursive: true });

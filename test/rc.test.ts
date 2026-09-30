@@ -175,6 +175,18 @@ describe('rc robustness', () => {
     }
   });
 
+  it('single-quotes paths containing ! or backslash (history expansion / escape)', () => {
+    process.env.SDKVM_HOME = '/tmp/sdk!vm\\x';
+    try {
+      const block = rcBlock('java');
+      expect(block).toMatch(/export JAVA_HOME='/);
+      expect(block).not.toContain('export JAVA_HOME="');
+      expect(block).toContain('sdk!vm');
+    } finally {
+      delete process.env.SDKVM_HOME;
+    }
+  });
+
   it('removeRcBlockFromFile removes the block from disk', () => {
     const file = path.join(os.tmpdir(), `sdkvm-rc-${process.pid}.rc`);
     fs.writeFileSync(file, upsertRcContent('export A=1\n', 'java'));
@@ -290,10 +302,10 @@ describe('fish 标记块', () => {
     const block = rcBlockFish('java');
     // 3.2+ 的幂等入口
     expect(block).toContain('if type -q fish_add_path');
-    expect(block).toContain('fish_add_path -p $JAVA_HOME/bin');
+    expect(block).toContain('fish_add_path -p "$JAVA_HOME/bin"');
     // 老版本回退分支也必须幂等（contains 守卫），且以 end 收尾
-    expect(block).toContain('else if not contains $JAVA_HOME/bin $PATH');
-    expect(block).toContain('set -gx PATH $JAVA_HOME/bin $PATH');
+    expect(block).toContain('else if not contains "$JAVA_HOME/bin" $PATH');
+    expect(block).toContain('set -gx PATH "$JAVA_HOME/bin" $PATH');
     // if/else 以独立的 end 行收尾（rcEnd 标记在块外层）
     expect(block.split('\n')).toContain('end');
     // fish 语法：绝不能混入 bash 的 export / case

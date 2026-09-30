@@ -1,9 +1,8 @@
-import fs from 'node:fs';
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform } from './types.js';
 import { httpJson, httpJsonWithHeaders } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
 import { LTS_MAJORS, compareVersions, formatVersion, parseVersion } from '../core/version.js';
-import { detectPlatform } from '../core/platform.js';
+import { detectPlatform, hostLibc } from '../core/platform.js';
 import { temurinVendor } from './temurin.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { log } from '../ui/log.js';
@@ -62,20 +61,6 @@ function compareZuluPackages(a: ZuluPackage, b: ZuluPackage): number {
   return compareNumericArrays(a.distro_version, b.distro_version);
 }
 
-/**
- * 宿主 libc（仅 linux 相关）：检测到 musl loader（Alpine 等）则 musl，否则 glibc。
- * musl 与 glibc 构建互不兼容——按宿主选择，而不是一刀切排除 musl。
- */
-function hostLibc(platform: VendorPlatform): 'glibc' | 'musl' {
-  if (platform.os !== 'linux') return 'glibc';
-  const markers = [
-    '/lib/ld-musl-x86_64.so.1',
-    '/lib/ld-musl-aarch64.so.1',
-    '/etc/alpine-release',
-  ];
-  return markers.some((m) => fs.existsSync(m)) ? 'musl' : 'glibc';
-}
-
 /** 客户端过滤：只要普通 ca-jdk 构建（API 的过滤参数不可靠：会漏进 crac/fx-jre） */
 function pickPlainJdk(
   packages: ZuluPackage[],
@@ -84,7 +69,9 @@ function pickPlainJdk(
 ): ZuluPackage | null {
   const ext = platform.os === 'windows' ? '.zip' : '.tar.gz';
   const wanted = versionPrefix ?? '';
-  const wantMusl = hostLibc(platform) === 'musl';
+  // 与 node/python 共用 hostLibc：按本次解析的架构找加载器，并认 Alpine 标记。
+  // 旧实现同时探测另一种架构的加载器，x64 musl 文件落在 aarch64 glibc 主机上会选错包
+  const wantMusl = platform.os === 'linux' && hostLibc(platform.arch) === 'musl';
   const candidates = packages.filter((p) => {
     if (!/^zulu[\d.]+-ca-jdk[\d.]*-/i.test(p.name)) return false;
     if (!p.name.endsWith(ext)) return false;

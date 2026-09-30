@@ -41,7 +41,9 @@ export function normalizeExtracted(tmpDir: string, platform: Platform, type: Sdk
   const entries = fs.readdirSync(tmpDir).filter((name) => !isArchiveMeta(name));
   const dirs = entries.filter((name) => {
     try {
-      return fs.statSync(path.join(tmpDir, name)).isDirectory();
+      // lstat：指向目录的符号链接不能当解压根。stat 会跟着链接走进去，
+      // 随后把链接本身 rename 进安装目录，真正的文件还留在临时目录里被清掉
+      return fs.lstatSync(path.join(tmpDir, name)).isDirectory();
     } catch {
       return false;
     }

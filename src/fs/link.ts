@@ -6,6 +6,32 @@ import { log } from '../ui/log.js';
 import type { Platform } from '../core/platform.js';
 import type { SdkTypeId } from '../sdk/types.js';
 
+/**
+ * 摘掉链接或临时文件。Windows junction 在部分 Node 版本上 lstat 不是 symlink，
+ * `rm({ recursive: true })` 会走进目标把已安装的 SDK 删掉。能 readlink 的只摘重解析点。
+ */
+function removeLinkEntry(p: string): void {
+  let st: fs.Stats;
+  try {
+    st = fs.lstatSync(p);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
+  if (st.isSymbolicLink()) {
+    fs.unlinkSync(p);
+    return;
+  }
+  try {
+    fs.readlinkSync(p);
+    fs.rmdirSync(p);
+    return;
+  } catch {
+    // 普通文件或真目录
+  }
+  fs.rmSync(p, { recursive: st.isDirectory(), force: true });
+}
+
 /** current-* 位置被真实目录占用（用户手建 / 旧版残留）而非链接。
  *  Windows junction 的 lstat 不是 symlink，但 readlink 能读出目标——真目录会抛 EINVAL。 */
 function isRealDirectory(p: string): boolean {
@@ -36,7 +62,7 @@ export function setCurrent(type: SdkTypeId, target: string, platform: Platform):
     // 直接 rm+symlink 时，symlink 失败（路径策略/杀软）会连旧链接一起丢，
     // 挪开后新链接失败可把旧的换回来
     const aside = `${link}.old-${process.pid}`;
-    fs.rmSync(aside, { recursive: true, force: true });
+    removeLinkEntry(aside);
     let hadOld = false;
     try {
       fs.renameSync(link, aside);
@@ -69,7 +95,7 @@ export function setCurrent(type: SdkTypeId, target: string, platform: Platform):
       });
     }
     try {
-      fs.rmSync(aside, { recursive: true, force: true });
+      removeLinkEntry(aside);
     } catch {
       // 旧链接删不掉（杀软短暂占用）：留着无害，下次 use 会以新 pid 重建 aside 名
     }
@@ -86,8 +112,18 @@ export function readCurrent(type: SdkTypeId): string | null {
   const link = paths.current(type);
   try {
     const st = fs.lstatSync(link);
-    if (!st.isSymbolicLink()) return null;
-    const raw = fs.readlinkSync(link) as string;
+    let raw: string | null = null;
+    if (st.isSymbolicLink()) {
+      raw = fs.readlinkSync(link);
+    } else if (st.isDirectory()) {
+      // Windows junction：lstat 可能报成目录。readlink 失败才是真目录
+      try {
+        raw = fs.readlinkSync(link);
+      } catch {
+        return null;
+      }
+    }
+    if (raw == null) return null;
     return path.resolve(path.dirname(link), raw);
   } catch {
     return null;
@@ -102,8 +138,8 @@ export function clearCurrent(type: SdkTypeId): void {
     return;
   }
   try {
-    fs.rmSync(link, { force: true });
-  } catch {
-    fs.rmSync(link, { recursive: true, force: true });
+    removeLinkEntry(link);
+  } catch (err) {
+    log.warn(`could not remove ${link}: ${(err as Error).message}`);
   }
 }

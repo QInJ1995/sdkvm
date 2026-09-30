@@ -15,8 +15,14 @@ export interface Platform {
  *  vendor 在 musl 主机上要提前给出能读懂的错误，而不是装上后一跑就崩。 */
 export function hostLibc(arch: 'aarch64' | 'x64' = process.arch === 'arm64' ? 'aarch64' : 'x64'): 'glibc' | 'musl' | null {
   if (process.platform !== 'linux') return null;
-  const loader = `/lib/ld-musl-${arch === 'aarch64' ? 'aarch64' : 'x86_64'}.so.1`;
-  if (fs.existsSync(loader) || fs.existsSync(`/usr${loader}`)) return 'musl';
+  const name = arch === 'aarch64' ? 'aarch64' : 'x86_64';
+  const markers = [
+    `/lib/ld-musl-${name}.so.1`,
+    `/usr/lib/ld-musl-${name}.so.1`,
+    // 加载器不在常规路径时（部分容器把 /lib 挪走），Alpine 发行标记仍能认出 musl
+    '/etc/alpine-release',
+  ];
+  if (markers.some((m) => fs.existsSync(m))) return 'musl';
   return 'glibc';
 }
 

@@ -215,6 +215,8 @@ export async function httpFetch(url: string, init: RequestInit = {}): Promise<Re
       }
       return res;
     } catch (err) {
+      // 调用方的空闲超时 / 取消已经 abort：再重试只会拿着已取消的 signal 空转
+      if (init.signal?.aborted) throw err;
       // 非重试语义的 HttpError（4xx、永久性 5xx）立即上抛，重试留给出错可恢复的路径
       if (err instanceof HttpError && !RETRYABLE_STATUS.has(err.status)) throw err;
       lastErr = err;

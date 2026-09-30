@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { httpJson, httpText } from '../src/net/http.js';
+import { httpFetch, httpJson, httpText } from '../src/net/http.js';
 import { SdkvmError } from '../src/util/errors.js';
 
 afterEach(() => {
@@ -88,6 +88,23 @@ describe('body 读取重试', () => {
     const err: unknown = await httpText('https://down.example/x').catch((e) => e);
     expect(err).toBeInstanceOf(SdkvmError);
     expect(String((err as SdkvmError).hint)).toMatch(/ECONNREFUSED/);
+  });
+});
+
+describe('调用方取消', () => {
+  it('signal 已 abort 时不再重试', async () => {
+    const ac = new AbortController();
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1;
+        ac.abort();
+        throw new DOMException('The operation was aborted', 'AbortError');
+      }),
+    );
+    await expect(httpFetch('https://abort.example/x', { signal: ac.signal })).rejects.toThrow(/abort/i);
+    expect(calls).toBe(1);
   });
 });
 

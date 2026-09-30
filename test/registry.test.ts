@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installUseHint, refinedUseHint } from '../src/cli/install.js';
 import { currentSdk, findInstalled, listInstalled } from '../src/core/registry.js';
-import { setCurrent } from '../src/fs/link.js';
+import { clearCurrent, readCurrent, setCurrent } from '../src/fs/link.js';
 import { detectPlatform } from '../src/core/platform.js';
 import {
   parseFlutterVersion,
@@ -263,6 +263,43 @@ describe.skipIf(process.platform === 'win32')('currentSdk 路径拼写归一', (
     fs.mkdirSync(path.join(home, 'jdks', 'temurin-21.0.5+11'), { recursive: true });
     fs.symlinkSync('/nonexistent/sdkvm/jdk', path.join(home, 'current-java'));
     expect(currentSdk('java')).toBeNull();
+  });
+});
+
+describe('current 链接删除', () => {
+  it('clearCurrent 只摘掉链接，不删除目标目录', () => {
+    const target = path.join(home, 'jdks', 'temurin-21');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'marker'), 'keep');
+    setCurrent('java', target, detectPlatform());
+    clearCurrent('java');
+    expect(fs.existsSync(path.join(target, 'marker'))).toBe(true);
+    expect(fs.existsSync(path.join(home, 'current-java'))).toBe(false);
+  });
+});
+
+describe('readCurrent junction', () => {
+  it('lstat 把链接报成目录时仍能读出目标', () => {
+    const target = path.join(home, 'jdks', 'temurin-21');
+    fs.mkdirSync(target, { recursive: true });
+    const link = path.join(home, 'current-java');
+    const realLstat = fs.lstatSync.bind(fs);
+    const realReadlink = fs.readlinkSync.bind(fs);
+    vi.spyOn(fs, 'lstatSync').mockImplementation(((p: fs.PathLike) => {
+      if (String(p) === link) {
+        return { isSymbolicLink: () => false, isDirectory: () => true } as fs.Stats;
+      }
+      return realLstat(p);
+    }) as typeof fs.lstatSync);
+    vi.spyOn(fs, 'readlinkSync').mockImplementation(((p: fs.PathLike) => {
+      if (String(p) === link) return target;
+      return realReadlink(p);
+    }) as typeof fs.readlinkSync);
+    try {
+      expect(readCurrent('java')).toBe(path.resolve(target));
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
 

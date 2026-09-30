@@ -129,14 +129,17 @@ export async function downloadFile(
     for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
       timer.refresh();
       throwIfStreamError();
-      if (!out.write(chunk)) {
+      // Node fetch / undici 会复用 body 缓冲区；fs.write 在回调返回前仍持有这块内存。
+      // 不拷贝的话，下一块数据会在写盘完成前覆盖上一块，归档和 sha256 一起坏掉。
+      const data = Buffer.from(chunk);
+      hash.update(data);
+      bytes += data.length;
+      if (!out.write(data)) {
         await waitForDrain(out, ac.signal);
         // 背压等待期间收不到 chunk，计时器会空转误报"无数据"——drain 回来即刷新
         timer.refresh();
       }
       throwIfStreamError();
-      hash.update(chunk);
-      bytes += chunk.byteLength;
       onProgress?.(bytes, total);
     }
     throwIfStreamError();

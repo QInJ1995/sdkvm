@@ -31,6 +31,42 @@ function stubFetch(body: string, headers: Record<string, string>) {
   return calls;
 }
 
+describe('downloadFile 缓冲区', () => {
+  it('源缓冲区在 write 时被复用，落盘内容和 sha256 仍是原字节', async () => {
+    const payload = Buffer.from('hello world');
+    const shared = new Uint8Array(payload);
+    class ReusingWrite extends Writable {
+      chunks: Buffer[] = [];
+      override _write(chunk: Buffer, _enc: BufferEncoding, cb: (err?: Error | null) => void): void {
+        // 模拟 undici：交给 write 的若仍是源缓冲区，下一次填充会改掉还没落盘的字节
+        if (chunk.byteOffset === shared.byteOffset && chunk.buffer === shared.buffer) shared.fill(0);
+        this.chunks.push(Buffer.from(chunk));
+        cb();
+      }
+    }
+    const sink = new ReusingWrite();
+    vi.spyOn(fs, 'createWriteStream').mockImplementation(() => sink as unknown as fs.WriteStream);
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => undefined);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(shared);
+        controller.close();
+      },
+    });
+    globalThis.fetch = (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { 'content-length': String(payload.length) },
+      })) as typeof fetch;
+
+    const dest = path.join(dir, 'reuse.zip');
+    const r = await downloadFile('https://example.com/reuse.zip', dest);
+    const written = Buffer.concat(sink.chunks);
+    expect(written.equals(payload)).toBe(true);
+    expect(r.sha256).toBe(crypto.createHash('sha256').update(payload).digest('hex'));
+  });
+});
+
 describe('downloadFile 长度校验', () => {
   it('identity 响应：字节数与 content-length 一致时成功', async () => {
     const calls = stubFetch('hello world', { 'content-length': '11' });
