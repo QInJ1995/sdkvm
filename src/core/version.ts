@@ -115,10 +115,6 @@ export function formatVersion(v: SdkVersion): string {
   return s;
 }
 
-export function toDirName(v: SdkVersion): string {
-  return `${v.vendor}-${formatVersion(v)}`;
-}
-
 /** 安装目录名解析器工厂：<vendor>-<version> 目录名 → 版本；不匹配或解析失败返回 null */
 function makeDirNameParser(
   ids: readonly string[],

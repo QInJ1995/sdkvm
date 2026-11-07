@@ -236,8 +236,14 @@ export const cpythonVendor: Vendor = {
   supportsFullVersionList: true,
 
   async listMajors(): Promise<ReleaseLine[]> {
+    const platform = detectPlatform();
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('This baseline ships glibc CPython builds only; musl Linux (Alpine) is not supported', {
+        hint: 'Use the distro python package (apk add python3), or a musl build outside this tool',
+      });
+    }
     const { files } = await fetchRelease();
-    return pythonReleaseLines(files, detectPlatform());
+    return pythonReleaseLines(files, platform);
   },
 
   async resolve(spec: VersionSpec, platform: VendorPlatform): Promise<ResolvedArtifact> {

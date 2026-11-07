@@ -149,6 +149,12 @@ describe('verifyChecksum', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('no checksum source'));
   });
 
+  it('fails when no checksum and download length was unknown', async () => {
+    await expect(verifyChecksum(art(), 'a'.repeat(64), { lengthKnown: false })).rejects.toThrow(
+      /No checksum source/,
+    );
+  });
+
   it('strict mode fails when checksum source is missing', async () => {
     await expect(verifyChecksum(art(), 'a'.repeat(64), { strict: true })).rejects.toBeInstanceOf(
       SdkvmError,

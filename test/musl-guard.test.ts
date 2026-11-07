@@ -12,7 +12,15 @@ import { temurinVendor } from '../src/vendor/temurin.js';
 // Corretto 与 Temurin 有官方 alpine 构建，musl 主机应解析到那条 URL，而不是 glibc 包。
 vi.mock('../src/core/platform.js', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../src/core/platform.js')>();
-  return { ...orig, hostLibc: () => 'musl' as const };
+  return {
+    ...orig,
+    hostLibc: () => 'musl' as const,
+    // listMajors 走 detectPlatform()：测机若是 mac 不会进 musl 分支，这里钉成 linux
+    detectPlatform: () =>
+      ({ os: 'linux', arch: 'x64', rawPlatform: 'linux', rawArch: 'x64' }) as ReturnType<
+        typeof orig.detectPlatform
+      >,
+  };
 });
 
 const LINUX_X64 = { os: 'linux' as const, arch: 'x64' as const };
@@ -39,6 +47,13 @@ describe('musl 主机守卫（glibc-only 基线在解析期拒绝）', () => {
 
   it('golang rejects musl before any network call', async () => {
     await expect(golangVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
+  });
+
+  it('listMajors 与 resolve 同样拒绝 musl（ls -r 不谎报可装版本）', async () => {
+    await expect(cpythonVendor.listMajors()).rejects.toThrow(/musl/i);
+    await expect(golangVendor.listMajors()).rejects.toThrow(/musl/i);
+    await expect(flutterVendor.listMajors()).rejects.toThrow(/musl/i);
+    await expect(minicondaVendor.listMajors()).rejects.toThrow(/musl/i);
   });
 
   it('corretto on musl resolves the official alpine tarball, not the glibc one', async () => {

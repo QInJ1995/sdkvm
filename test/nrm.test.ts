@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   findRegistryByName,
-  formatNrmListLine,
   matchListedRegistryName,
   normalizeRegistryUrl,
   nrmAdd,
@@ -14,6 +13,7 @@ import {
   nrmTest,
   nrmUse,
 } from '../src/cli/nrm.js';
+import { formatListLine } from '../src/ui/listformat.js';
 import { loadConfig } from '../src/core/config.js';
 import { npmCliPath, run } from '../src/util/spawn.js';
 import { SdkvmError } from '../src/util/errors.js';
@@ -59,10 +59,10 @@ describe('nrm presets', () => {
   });
 
   it('formats nrm-style list lines', () => {
-    expect(formatNrmListLine('npm', 'https://registry.npmjs.org/', false)).toBe(
+    expect(formatListLine('npm', 'https://registry.npmjs.org/', false)).toBe(
       '  npm ---------- https://registry.npmjs.org/',
     );
-    expect(formatNrmListLine('taobao', 'https://registry.npmmirror.com/', true)).toBe(
+    expect(formatListLine('taobao', 'https://registry.npmmirror.com/', true)).toBe(
       '* taobao ------- https://registry.npmmirror.com/',
     );
   });

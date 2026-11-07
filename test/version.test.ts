@@ -9,7 +9,6 @@ import {
   parseFlutterVersion,
   formatVersion,
   parseDirName,
-  toDirName,
   parseGoDirName,
   parseGoUserSpec,
   parseGoVersion,
@@ -75,11 +74,13 @@ describe('parseVersion', () => {
 
   it('X.0.0 only folds when the input itself was the bare major', () => {
     // 用户输入裸 major → 目录折叠回 "21"
-    expect(toDirName(parseVersion('temurin', '21'))).toBe('temurin-21');
+    const bare = parseVersion('temurin', '21');
+    expect(`${bare.vendor}-${formatVersion(bare)}`).toBe('temurin-21');
     // API 派生的三段 [21,0,0]（Zulu GA 的 java_version 数组）保持 21.0.0，
     // 不能塌成 zulu-21 与按 major 安装的目录混淆
     expect(formatVersion(parseVersion('zulu', '21.0.0'))).toBe('21.0.0');
-    expect(toDirName(parseVersion('zulu', '21.0.0'))).toBe('zulu-21.0.0');
+    const zulu = parseVersion('zulu', '21.0.0');
+    expect(`${zulu.vendor}-${formatVersion(zulu)}`).toBe('zulu-21.0.0');
     // 目录名 temurin-21 回读后再写出保持稳定（不变成 21.0.0）
     expect(formatVersion(parseVersion('temurin', '21'))).toBe('21');
   });

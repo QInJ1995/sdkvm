@@ -283,6 +283,7 @@ describe('zulu', () => {
       download_url: 'https://cdn.azul.com/zulu/bin/zulu21.52.203-ca-jdk21.0.12.1-win_aarch64.zip',
       java_version: [21, 0, 12, 1],
       distro_version: [21, 52, 203, 0],
+      sha256_hash: 'ab'.repeat(32),
     });
     vi.stubGlobal('fetch', vi.fn(async () => resJson(winPkgs)));
     const a = await zulu.resolve({ kind: 'major', major: 21 }, WIN);
@@ -297,6 +298,7 @@ describe('zulu', () => {
       download_url: 'https://cdn.azul.com/zulu8.0.202.tar.gz',
       java_version: [8, 0, 202],
       distro_version: [8, 40, 0, 13],
+      sha256_hash: 'ab'.repeat(32),
     };
     const fetchMock = vi.fn(async (url: string | URL) => {
       const page = new URL(String(url)).searchParams.get('page');
@@ -331,6 +333,7 @@ describe('zulu', () => {
       download_url: 'https://cdn.azul.com/zulu8.0.202.tar.gz',
       java_version: [8, 0, 202],
       distro_version: [8, 40, 0, 13],
+      sha256_hash: 'ab'.repeat(32),
     };
     const fetchMock = vi.fn(async (url: string | URL) => {
       const page = new URL(String(url)).searchParams.get('page');
@@ -382,7 +385,7 @@ describe('zulu', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('still resolves when the checksum detail is unreachable', async () => {
+  it('fails closed when the checksum detail is unreachable', async () => {
     const listed = {
       name: 'zulu21.52.203-ca-jdk21.0.12.1-macosx_aarch64.tar.gz',
       download_url: 'https://cdn.azul.com/zulu/bin/zulu21.tar.gz',
@@ -399,9 +402,9 @@ describe('zulu', () => {
         return resJson([listed]);
       }),
     );
-    const a = await zulu.resolve({ kind: 'major', major: 21 }, MAC);
-    expect(a.downloadUrl).toBe(listed.download_url);
-    expect(a.checksum).toBeNull();
+    await expect(zulu.resolve({ kind: 'major', major: 21 }, MAC)).rejects.toThrow(
+      /Cannot fetch Zulu checksum|Zulu package .* has no checksum/,
+    );
   });
 });
 

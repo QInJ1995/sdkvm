@@ -91,7 +91,13 @@ export const flutterVendor: Vendor = {
 
   /** 一条 minor 线（3.47）等价 java 的一个 major；latest/line 只看 stable 通道 */
   async listMajors(): Promise<ReleaseLine[]> {
-    const { stable } = await fetchEntries(detectPlatform());
+    const platform = detectPlatform();
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Flutter publishes no musl/Alpine engine builds', {
+        hint: 'Official Linux archives are glibc. Use a glibc distro, or install Flutter outside this tool.',
+      });
+    }
+    const { stable } = await fetchEntries(platform);
     return groupMinorLines(
       stable.map(({ v }) => v),
       (v) => `${v.major}.${v.minor}`,

@@ -367,7 +367,10 @@ function rememberRcPath(file: string): void {
     if (list.includes(abs)) return;
     list.push(abs);
     if (list.length > RC_TOUCHED_CAP) list = list.slice(-RC_TOUCHED_CAP);
-    fs.writeFileSync(store, `${JSON.stringify(list)}\n`);
+    // 与 writeRcAtomic 同款 tmp+rename：半截 JSON 会让下次读失败、历史路径全丢
+    const tmp = `${store}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(list)}\n`);
+    fs.renameSync(tmp, store);
   } catch {
     // 记不住不影响本次写入；最坏卸载扫不全历史路径
   }

@@ -7,7 +7,6 @@ import { cmdPath } from './cmdname.js';
 import {
   availableSiteNamesForType,
   findMirrorSite,
-  formatMirrorListLine,
   listMirrorSitesForType,
   matchMirrorSiteName,
   mirrorableVendors,
@@ -15,6 +14,7 @@ import {
   siteVendorsForType,
   type MirrorVendorId,
 } from './mirror-presets.js';
+import { formatListLine } from '../ui/listformat.js';
 
 function mirrorableIds(type: SdkTypeId): MirrorVendorId[] {
   return [...mirrorableVendors(type)];
@@ -47,14 +47,14 @@ export function mirrorCommand(
           .map(([id, url]) => (mirrorable.length === 1 ? url! : `${id}=${url}`))
           .join(' ');
       }
-      log.raw(formatMirrorListLine(site.name, detail, matched === site.name));
+      log.raw(formatListLine(site.name, detail, matched === site.name));
     }
     if (matched == null) {
       const parts = mirrorable.map((id) => {
         const url = config.mirror[id];
         return url ? `${id}=${url}` : `${id}=(official)`;
       });
-      log.raw(formatMirrorListLine('custom', parts.join(' '), true));
+      log.raw(formatListLine('custom', parts.join(' '), true));
     }
     return;
   }

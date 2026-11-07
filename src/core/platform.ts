@@ -64,7 +64,3 @@ export function detectPlatform(override?: { platform?: string; arch?: string }):
   }
   return { os, arch, rawPlatform, rawArch };
 }
-
-export function isWindows(platform: Platform): boolean {
-  return platform.os === 'windows';
-}

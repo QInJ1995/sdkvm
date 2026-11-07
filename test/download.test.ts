@@ -115,6 +115,15 @@ describe('downloadFile 长度校验', () => {
     expect(existsSync(`${dest}.tmp-${process.pid}.part`)).toBe(false);
   });
 
+  it('无 Content-Length 时下载层放行（完整性交给校验：lengthKnown=false 且无哈希则失败）', async () => {
+    // CDN/chunked 常省略 CL；此时 total 为 null，install 必须把 lengthKnown:false 传给 verify
+    stubFetch('hello world', {});
+    const dest = path.join(dir, 'no-cl.zip');
+    const r = await downloadFile('https://example.com/no-cl.zip', dest);
+    expect(r.bytes).toBe(11);
+    expect(r.total).toBeNull();
+  });
+
   it('响应中途断开时销毁写流，不把 ERR_STREAM_DESTROYED 变成未处理错误', async () => {
     // write 回调故意晚于 destroy：复现大文件下载中断时 fs.WriteStream 的竞态
     class LateWriteStream extends Writable {

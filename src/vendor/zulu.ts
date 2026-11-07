@@ -131,19 +131,28 @@ async function queryPackages(
 
 /**
  * 列目录接口不再返回 sha256_hash，哈希在包详情上。
- * 详情失败时保持缺失，安装仍走尽力校验，不因此中断。
+ * 拿不到就 fail-closed：无哈希 + 无 Content-Length 的截断下载会被装上坏 JDK。
  */
 async function hydrateChecksum(pkg: ZuluPackage): Promise<ZuluPackage> {
-  if (pkg.sha256_hash || !pkg.package_uuid) return pkg;
+  if (pkg.sha256_hash) return pkg;
+  if (!pkg.package_uuid) {
+    throw new SdkvmError(`Zulu package ${pkg.name} has no checksum`, {
+      hint: 'Retry later, or pick another build from `sdkvm java ls -r --vendor zulu`.',
+    });
+  }
   try {
     const detail = await httpJson<{ sha256_hash?: unknown }>(`${API}/zulu/packages/${pkg.package_uuid}`);
     if (typeof detail.sha256_hash === 'string' && /^[0-9a-f]{64}$/i.test(detail.sha256_hash)) {
       return { ...pkg, sha256_hash: detail.sha256_hash.toLowerCase() };
     }
-  } catch {
-    // 详情不可达时跳过校验
+  } catch (err) {
+    throw new SdkvmError(`Cannot fetch Zulu checksum for ${pkg.name}`, {
+      hint: `${(err as Error).message}. Retry later, or pick another build.`,
+    });
   }
-  return pkg;
+  throw new SdkvmError(`Zulu package ${pkg.name} has no checksum`, {
+    hint: 'Retry later, or pick another build from `sdkvm java ls -r --vendor zulu`.',
+  });
 }
 
 export const zuluVendor: Vendor = {
@@ -221,9 +230,7 @@ export const zuluVendor: Vendor = {
       dirName: `zulu-${formatVersion(v)}`,
       displayName: `Zulu ${formatVersion(v)}`,
       downloadUrl: hashed.download_url,
-      checksum: hashed.sha256_hash
-        ? { kind: 'sha256', expected: hashed.sha256_hash }
-        : null,
+      checksum: { kind: 'sha256', expected: hashed.sha256_hash! },
       archive: platform.os === 'windows' ? 'zip' : 'tar.gz',
     };
   },

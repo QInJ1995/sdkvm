@@ -1,7 +1,7 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
 import { httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
-import { hostLibc } from '../core/platform.js';
+import { detectPlatform, hostLibc } from '../core/platform.js';
 import { compareVersions, formatGoVersion, parseGoVersion, type SdkVersion } from '../core/version.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { groupMinorLines, specLabel } from './shared.js';
@@ -78,6 +78,12 @@ export const golangVendor: Vendor = {
 
   /** go 无 major 概念：一条 minor 线（1.24）等价 java 的一个 major */
   async listMajors(): Promise<ReleaseLine[]> {
+    const platform = detectPlatform();
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Official Go archives are glibc-only; musl Linux (Alpine) is not supported', {
+        hint: 'Use the distro package (apk add go), or install a musl toolchain outside this tool',
+      });
+    }
     const versions = await stableVersions();
     return groupMinorLines(
       versions.map(({ v }) => v),

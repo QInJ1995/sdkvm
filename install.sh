@@ -316,6 +316,7 @@ chmod +x "$BIN_DIR/sdkvm"
 ensure_path_rc() {
   shell_base=$(basename "${SHELL:-}")
   rc=
+  fish_rc=0
   case "$shell_base" in
     zsh|-zsh) rc="$HOME/.zshrc" ;;
     bash|-bash)
@@ -323,6 +324,15 @@ ensure_path_rc() {
         Darwin) rc="$HOME/.bash_profile" ;;
         *) rc="$HOME/.bashrc" ;;
       esac
+      ;;
+    fish|-fish)
+      # 与 CLI fishConfigPath 对齐：优先 $XDG_CONFIG_HOME
+      if [ -n "${XDG_CONFIG_HOME:-}" ]; then
+        rc="$XDG_CONFIG_HOME/fish/config.fish"
+      else
+        rc="$HOME/.config/fish/config.fish"
+      fi
+      fish_rc=1
       ;;
     *) return 1 ;;
   esac
@@ -355,13 +365,27 @@ ensure_path_rc() {
 
   begin='# >>> sdkvm path >>>'
   end='# <<< sdkvm path <<<'
-  block=$(printf '%s\n%s\n%s' \
-    "$begin" \
-    "case \":\$PATH:\" in *\":${path_ref}:\"*) ;; *) export PATH=\"${path_ref}:\$PATH\";; esac" \
-    "$end")
+  if [ "$fish_rc" = 1 ]; then
+    # fish 语法：优先 fish_add_path（与 CLI rcBlockFish 同款思路）
+    block=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' \
+      "$begin" \
+      "if type -q fish_add_path" \
+      "  fish_add_path -p ${path_ref}" \
+      "else" \
+      "  contains -- ${path_ref} \$PATH; or set -gx PATH ${path_ref} \$PATH" \
+      "end" \
+      "$end")
+  else
+    block=$(printf '%s\n%s\n%s' \
+      "$begin" \
+      "case \":\$PATH:\" in *\":${path_ref}:\"*) ;; *) export PATH=\"${path_ref}:\$PATH\";; esac" \
+      "$end")
+  fi
 
   # 注意：本函数在 `if ! ensure_path_rc; then` 的条件上下文里执行，set -e 不生效，
   # 每一步都必须显式检查，绝不能在失败时把 $rc 截断重写
+  # fish 的 ~/.config/fish 首次可能不存在
+  mkdir -p "$(dirname "$rc")" || return 1
   tmp=$(mktemp) || return 1
   if [ -f "$rc" ]; then
     # 结束标记缺失或带空白时只删起始行，禁止从 begin 跳到文件尾

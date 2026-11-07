@@ -6,13 +6,13 @@ import { mirrorCommand } from '../src/cli/mirror.js';
 import {
   availableSiteNamesForType,
   findMirrorSite,
-  formatMirrorListLine,
   listMirrorSitesForType,
   matchMirrorSiteName,
   normalizeMirrorUrl,
   parseMirrorRootUrl,
   siteVendorsForType,
 } from '../src/cli/mirror-presets.js';
+import { formatListLine } from '../src/ui/listformat.js';
 import { loadConfig } from '../src/core/config.js';
 import { SdkvmError } from '../src/util/errors.js';
 import { log } from '../src/ui/log.js';
@@ -113,7 +113,7 @@ describe('mirror presets', () => {
   });
 
   it('formats nrm-style list lines', () => {
-    expect(formatMirrorListLine('nju', 'https://mirror.nju.edu.cn/golang', true)).toBe(
+    expect(formatListLine('nju', 'https://mirror.nju.edu.cn/golang', true)).toBe(
       '* nju ---------- https://mirror.nju.edu.cn/golang',
     );
   });

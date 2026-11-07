@@ -127,10 +127,6 @@ export function matchListedMavenRegistry(registryUrl: string): string | null {
   return hit?.name ?? null;
 }
 
-export function formatMrmListLine(name: string, url: string, current: boolean): string {
-  return formatListLine(name, url, current);
-}
-
 /** 标记必须独占一行（允许首尾空白）才算 sdkvm 块边界：
  * 用户 XML 里行中出现的相同注释文本不是边界，按子串计数会误报"不配对"。
  * renderBlock 生成的标记始终独占一行，新旧版本写的块都能识别。 */
@@ -493,10 +489,10 @@ export function mrmLs(opts: { settings?: string } = {}): void {
   log.info(settingsLine(target));
   for (const p of listMavenRegistries()) {
     if (!p.list) continue;
-    log.raw(formatMrmListLine(p.name, p.url, active.name === p.name));
+    log.raw(formatListLine(p.name, p.url, active.name === p.name));
   }
   if (active.name === 'custom') {
-    log.raw(formatMrmListLine('custom', active.url, true));
+    log.raw(formatListLine('custom', active.url, true));
   }
 }
 
@@ -646,11 +642,11 @@ export async function mrmTest(
       const isCurrent = active.name === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(active.url);
       try {
         const ms = await probe(p.url);
-        return formatMrmListLine(p.name, `${ms} ms`, isCurrent);
+        return formatListLine(p.name, `${ms} ms`, isCurrent);
       } catch (err) {
         failures++;
         const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
-        return formatMrmListLine(p.name, `Fetch Error (${detail})`, isCurrent);
+        return formatListLine(p.name, `Fetch Error (${detail})`, isCurrent);
       }
     }),
   );

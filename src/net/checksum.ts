@@ -245,6 +245,11 @@ export interface VerifyChecksumOptions {
   file?: string;
   /** preflightChecksum 预取的官方哈希；提供时不再重复请求校验源 */
   prefetched?: ChecksumHit | null;
+  /**
+   * 下载是否带了可信的 Content-Length（未压缩且声明了长度）。
+   * false 时跳过校验会放行截断包——必须硬失败。
+   */
+  lengthKnown?: boolean;
 }
 
 function isNotFound(err: unknown): boolean {
@@ -338,39 +343,46 @@ async function loadChecksum(
   return null;
 }
 
-/** 尽力校验：来源缺失/获取失败 → warn 放行（strict 且无可用旁路时硬失败）；不匹配 → 硬失败 */
+/** 无可用哈希且不能靠 Content-Length 兜底时硬失败（否则截断包会被装上） */
+function rejectUnverified(artifact: ResolvedArtifact, reason: string, opts: VerifyChecksumOptions): void {
+  const strict = opts.strict === true;
+  const lengthKnown = opts.lengthKnown !== false;
+  if (strict || !lengthKnown) {
+    throw new SdkvmError(`${reason} for ${artifact.displayName}`, {
+      hint: !lengthKnown
+        ? 'The download had no Content-Length, so size cannot prove completeness. Retry when a checksum is available, or use a mirror that provides one.'
+        : 'Mirrored downloads require a verifiable checksum; unset the mirror or use the official source.',
+    });
+  }
+  log.warn(`${reason.toLowerCase()} for ${artifact.displayName}, skipping verification`);
+}
+
+/** 尽力校验：来源缺失/获取失败 → warn 放行（strict 或长度未知时硬失败）；不匹配 → 硬失败 */
 export async function verifyChecksum(
   artifact: ResolvedArtifact,
   actual: string,
   opts: VerifyChecksumOptions = {},
 ): Promise<void> {
-  const strict = opts.strict === true;
   const info = artifact.checksum;
   if (!info) {
-    if (strict) {
-      throw new SdkvmError(`No checksum source for ${artifact.displayName}`, {
-        hint: 'Mirrored downloads require a verifiable checksum; unset the mirror or use the official source.',
-      });
-    }
-    log.warn(`no checksum source for ${artifact.displayName}, skipping verification`);
+    rejectUnverified(artifact, 'No checksum source', opts);
     return;
   }
   let expected: string | null = info.expected?.toLowerCase() ?? null;
   let kind: ChecksumKind = info.kind;
   if (!expected && info.url) {
     // 预检与 verify 面对同一 artifact 与官方 URL，命中即可直接复用
-    const hit = opts.prefetched ?? (await loadChecksum(artifact, info.kind, info.url, strict));
-    if (!hit) return;
+    const hit = opts.prefetched ?? (await loadChecksum(artifact, info.kind, info.url, opts.strict === true));
+    if (!hit) {
+      // loadChecksum 在 strict 下已抛；非 strict 返回 null 时若长度未知仍须拦
+      rejectUnverified(artifact, 'Cannot fetch checksum', opts);
+      return;
+    }
     expected = hit.expected;
     kind = hit.kind;
   }
   if (!expected) {
-    if (strict) {
-      throw new SdkvmError(`Checksum source has no valid hash for ${artifact.displayName}`, {
-        hint: 'Mirrored downloads require a verifiable checksum.',
-      });
-    }
-    log.warn(`checksum source has no valid hash for ${artifact.displayName}, skipping`);
+    rejectUnverified(artifact, 'Checksum source has no valid hash', opts);
     return;
   }
   const digest = kind === info.kind ? actual : opts.file ? await hashFile(opts.file, kind) : null;

@@ -9,7 +9,6 @@ import {
   PYTHON_VENDOR_IDS,
 } from '../core/version.js';
 import { MIRROR_REWRITE_VENDORS } from '../vendor/mirror.js';
-import { formatListLine } from '../ui/listformat.js';
 
 /** 支持镜像的 vendor id（与 applyMirror / 历史 RECOMMENDED 对齐） */
 export type MirrorVendorId = 'temurin' | 'golang' | 'flutter' | 'nodejs' | 'maven' | 'miniconda' | 'cpython';
@@ -206,10 +205,6 @@ export function matchMirrorSiteName(
     if (hit) return site.name;
   }
   return null;
-}
-
-export function formatMirrorListLine(name: string, detail: string, current: boolean): string {
-  return formatListLine(name, detail, current);
 }
 
 export function availableSiteNamesForType(type: SdkTypeId): string[] {

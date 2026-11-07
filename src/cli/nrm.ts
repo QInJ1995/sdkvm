@@ -59,10 +59,6 @@ export function matchListedRegistryName(registryUrl: string): string | null {
   return hit?.name ?? null;
 }
 
-export function formatNrmListLine(name: string, url: string, current: boolean): string {
-  return formatListLine(name, url, current);
-}
-
 export type NpmRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 export type RegistryProbe = (url: string) => Promise<number>;
 
@@ -129,10 +125,10 @@ export async function nrmLs(npmRun: NpmRunner = defaultNpmRunner): Promise<void>
   const matched = matchListedRegistryName(current);
   for (const p of listRegistryEntries()) {
     if (!p.list) continue;
-    log.raw(formatNrmListLine(p.name, p.url, matched === p.name));
+    log.raw(formatListLine(p.name, p.url, matched === p.name));
   }
   if (!matched) {
-    log.raw(formatNrmListLine('custom', current, true));
+    log.raw(formatListLine('custom', current, true));
   }
 }
 
@@ -280,11 +276,11 @@ export async function nrmTest(
       const isCurrent = matched === p.name || normalizeRegistryUrl(p.url) === normalizeRegistryUrl(current);
       try {
         const ms = await probe(p.url);
-        return formatNrmListLine(p.name, `${ms} ms`, isCurrent);
+        return formatListLine(p.name, `${ms} ms`, isCurrent);
       } catch (err) {
         failures++;
         const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
-        return formatNrmListLine(p.name, `Fetch Error (${detail})`, isCurrent);
+        return formatListLine(p.name, `Fetch Error (${detail})`, isCurrent);
       }
     }),
   );

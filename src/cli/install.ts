@@ -509,7 +509,13 @@ export async function installCommand(
 
   const tmp = tmpExtractDir(paths.tmp());
   try {
-    await verifyChecksum(artifact, actual, { strict, file: dest, prefetched });
+    // 无 Content-Length 时无法用字节数证明完整：校验若再被 skip，会装上截断包
+    await verifyChecksum(artifact, actual, {
+      strict,
+      file: dest,
+      prefetched,
+      lengthKnown: dl.total != null,
+    });
 
     // 解压到私有 tmp 同样在锁外：不碰安装目录，2GB 的 Flutter 解压几十秒也不占锁
     let preparedRoot: string | null = null;

@@ -75,6 +75,12 @@ function assertSupportedPlatform(platform: VendorPlatform): void {
       hint: 'Miniconda publishes Windows x64 installers only.',
     });
   }
+  // listMajors 与 resolve 共用：Alpine 上 ls -r 不应列出装不上的版本
+  if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+    throw new SdkvmError('Miniconda installers are glibc builds; musl Linux (Alpine) is not supported', {
+      hint: 'conda does not publish musl installers; use micromamba or the distro python package',
+    });
+  }
 }
 
 function uniqueDesc(files: MinicondaFile[]): SdkVersion[] {
@@ -141,13 +147,6 @@ export const minicondaVendor: Vendor = {
     if (spec.kind === 'lts') {
       throw new SdkvmError('Unsupported version spec for Miniconda: lts', {
         hint: 'Miniconda has no lts alias — use "26", "26.7", "26.7.1-1", "py313", or "latest"',
-      });
-    }
-    // 安装器脚本与内嵌二进制都是 glibc 链接：musl 主机上安装器自身就跑不起来，
-    // 在解析阶段就拒绝，别让用户白下载 150MB
-    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
-      throw new SdkvmError('Miniconda installers are glibc builds; musl Linux (Alpine) is not supported', {
-        hint: 'conda does not publish musl installers; use micromamba or the distro python package',
       });
     }
     const files = await fetchIndex();
