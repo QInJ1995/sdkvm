@@ -29,6 +29,22 @@ case "$os:$arch" in
   *) echo "sdkvm: unsupported platform $os/$arch" >&2; exit 1 ;;
 esac
 
+# bootstrap 拉的是官方 glibc Node 归档。musl 主机（Alpine 等）装上即 loader 失败；
+# 官方 musl 构建要到更高 major，且与本脚本钉死的 runtime 版本无关——直接拒绝并给出路
+if [ "$node_os" = linux ]; then
+  musl_loader=
+  case "$node_arch" in
+    arm64) musl_loader=/lib/ld-musl-aarch64.so.1 ;;
+    *) musl_loader=/lib/ld-musl-x86_64.so.1 ;;
+  esac
+  if [ -e "$musl_loader" ] || [ -e "/usr/lib/$(basename "$musl_loader")" ] || [ -f /etc/alpine-release ]; then
+    echo "sdkvm: musl/Alpine hosts are not supported by this bootstrap installer" >&2
+    echo "sdkvm: it downloads a glibc Node.js runtime that will not start here" >&2
+    echo "sdkvm: install a distro Node.js (>=18.17), then: npm install -g sdkvm" >&2
+    exit 1
+  fi
+fi
+
 node_name="node-v${RUNTIME_NODE_VERSION}-${node_os}-${node_arch}"
 node_archive="${node_name}.tar.gz"
 tmpdir=$(mktemp -d)
@@ -56,7 +72,13 @@ lock_acquire() {
   tries=0
   while :; do
     if mkdir "$ROOT/.lock" 2>/dev/null; then
-      printf '{"pid":%s,"startedAt":%s}\n' "$$" "$(date +%s000)" >"$ROOT/.lock/info.json" 2>/dev/null || :
+      # 与 CLI lock.ts 对齐：info.json 写失败必须回滚删锁，否则留下无 pid 的目录
+      # 会被 CLI 按孤儿宽限期偷走，形成脚本与 sdkvm upgrade 双持锁
+      if ! printf '{"pid":%s,"startedAt":%s}\n' "$$" "$(date +%s000)" >"$ROOT/.lock/info.json" 2>/dev/null; then
+        rm -rf "$ROOT/.lock" 2>/dev/null || :
+        echo "sdkvm: cannot write $ROOT/.lock/info.json; check disk space and permissions" >&2
+        exit 1
+      fi
       LOCK_HELD=1
       return 0
     fi

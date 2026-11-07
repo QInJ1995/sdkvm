@@ -10,7 +10,7 @@ import { httpText } from '../net/http.js';
 import { extractArchive } from '../fs/extract.js';
 import { assertContained } from '../fs/layout.js';
 import { parseSha256SumLine } from '../net/checksum.js';
-import { sweepStaleParts } from './install.js';
+import { sweepStaleParts, sweepStaleTmp } from './install.js';
 import { SdkvmError } from '../util/errors.js';
 import { renameWithRetry } from '../util/rename.js';
 import { log } from '../ui/log.js';
@@ -272,8 +272,8 @@ export async function upgradeCommand(): Promise<void> {
   }
 
   // 校验和 + 归档下载在锁外（install.ts 同款：长下载不阻塞 use/uninstall/ls——
-  // sweepStaleParts 按龄清扫，别的进程正在写的 .part 每个块都刷 mtime，不会误伤）；
-  // 解压与换位写共享的 cli.next/cli 目录，必须持锁
+  // sweepStaleParts 按龄清扫 tmp/（及历史 cache/）里的 .part，活跃下载每个块都刷
+  // mtime，不会误伤）；解压与换位写共享的 cli.next/cli 目录，必须持锁
   const sumsUrl = releaseAssetUrl(RELEASE_SUMS);
   const assetUrl = releaseAssetUrl(RELEASE_ASSET);
   log.info(`checking ${assetUrl}`);
@@ -282,9 +282,10 @@ export async function upgradeCommand(): Promise<void> {
     throw new SdkvmError(`No checksum for ${RELEASE_ASSET}`, { hint: sumsUrl });
   }
   fs.mkdirSync(paths.tmp(), { recursive: true });
-  // 顺手清掉历史下载残留（kill -9 留下的 .part 永远不会再被复用）
+  // 顺手清掉历史下载残留：按龄清 .part（cache 旧布局 + tmp），再按死 pid 清 tmp 归档
   sweepStaleParts();
-  // 带 pid：两个 upgrade 同时下载时不再互相覆盖、互相删除同一份 cache/sdkvm.tgz
+  sweepStaleTmp();
+  // 带 pid：两个 upgrade 同时下载时不再互相覆盖、互相删除同一份 tmp 归档
   const dest = path.join(paths.tmp(), `sdkvm-upgrade-${process.pid}.tgz`);
   try {
     const downloaded = await downloadFile(assetUrl, dest);

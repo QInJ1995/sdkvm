@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -369,6 +370,63 @@ describe.skipIf(process.platform === 'win32')('rc 符号链接', () => {
       removeRcBlockFromFile(link, 'java');
       expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
       expect(fs.readFileSync(real, 'utf8').trim()).toBe('export A=1');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('悬空符号链接写透到目标路径，不把链接顶成普通文件', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-dangling-'));
+    try {
+      const target = path.join(dir, 'dotfiles', 'zshrc');
+      const link = path.join(dir, '.zshrc');
+      fs.symlinkSync(target, link);
+
+      upsertRcFile(link, 'java');
+
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(link)).toBe(target);
+      expect(fs.readFileSync(target, 'utf8')).toContain(rcBegin('java'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('rc 旁路锁', () => {
+  it('持锁目录写入 pid，释放后锁目录消失', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-lock-'));
+    const file = path.join(dir, '.zshrc');
+    try {
+      upsertRcFile(file, 'java');
+      expect(fs.existsSync(`${file}.sdkvm-lock`)).toBe(false);
+      expect(fs.readFileSync(file, 'utf8')).toContain(rcBegin('java'));
+      // 偷锁/释放残留也不应留下 .stale- / .rel-
+      const residue = fs.readdirSync(dir).filter((n) => n.includes('sdkvm-lock'));
+      expect(residue).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('死 pid 的残留锁可被下一次写入立即接管', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-deadlock-'));
+    const file = path.join(dir, '.zshrc');
+    const lockDir = `${file}.sdkvm-lock`;
+    try {
+      fs.writeFileSync(file, 'export A=1\n');
+      fs.mkdirSync(lockDir);
+      // 用必然已死的 pid：同步跑完即退出的子进程
+      const dead = Number(
+        execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).toString(),
+      );
+      fs.writeFileSync(path.join(lockDir, 'pid'), `${dead}\n`);
+
+      upsertRcFile(file, 'java');
+
+      expect(fs.existsSync(lockDir)).toBe(false);
+      expect(fs.readFileSync(file, 'utf8')).toContain(rcBegin('java'));
+      expect(fs.readFileSync(file, 'utf8')).toContain('export A=1');
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

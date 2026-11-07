@@ -34,5 +34,7 @@ describe('createProgress TTY 节流', () => {
     progress.done(4096, 4096);
     expect(writes).toHaveLength(3);
     expect(writes[2]).toContain('✓');
+    // 完成行与 update 同宽 pad：更短的完成文案不会留下进度条尾部残影
+    expect(writes[2]!.replace(/\n$/, '').length).toBeGreaterThanOrEqual(72);
   });
 });

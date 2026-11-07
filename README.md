@@ -110,6 +110,9 @@
   `install_only`),覆盖三大系统的 x64 与 aarch64;不安装 free-threaded、musl 构建,
   也不选 `x86_64_v2` / `v3` / `v4` 变体。列表反映最新一次构建快照,精确版本在最新
   快照缺失时自动回退查询最近几个历史 release 标签。
+- `install.sh` 自带的隔离 Node 运行时是 glibc 构建:Alpine / musl 主机请先装发行版
+  Node.js(>=18.17),再 `npm install -g sdkvm`。装好之后 CLI 对 JDK / Node 等仍会
+  按宿主 libc 选官方 musl / alpine 构建。
 
 ## 安装
 

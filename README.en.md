@@ -127,6 +127,10 @@ Platform limits:
   systems. Free-threaded and musl builds and the `x86_64_v2` / `v3` / `v4`
   variants are not installed. The list reflects the latest build snapshot; an
   exact version missing there is looked up in the most recent release tags.
+- The isolated Node runtime bundled by `install.sh` is a glibc build: on
+  Alpine / musl hosts, install a distro Node.js (>=18.17) first, then
+  `npm install -g sdkvm`. Once installed, the CLI still picks official musl /
+  alpine JDK and Node builds for the host libc.
 
 ## Install
 

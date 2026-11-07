@@ -167,6 +167,10 @@ function recoverInterrupted(finalDir: string, type: SdkTypeId): void {
         fs.renameSync(bak, finalDir);
         log.warn(`recovered the previous ${name} after an interrupted install`);
       }
+    } else if (mode === 'installer' && fs.existsSync(finalDir) && installerLooksComplete(finalDir, type)) {
+      // 首次 installer（无 bak）在成功与 settle 之间被打断：finalDir 已是完好新装，
+      // 绝不能按 replacing:false 半成品路径删掉——否则下次 use/install 把刚装好的 Miniconda 清掉
+      log.warn(`an earlier installer run of ${name} had finished; kept the installed directory`);
     } else if (fs.existsSync(finalDir) && (replacing || legacy)) {
       // 换位从未发生（或旧格式无法判断）：finalDir 是完好的旧版本，只清标记
       log.warn(`an earlier install of ${name} was interrupted before it made changes; kept the existing directory`);
@@ -233,26 +237,32 @@ export function recoverInterruptedInstalls(type: SdkTypeId): void {
 }
 
 /** .part 残留（kill -9 / Windows 上被杀软锁住删不掉）按龄清扫：下载在锁外进行，
- *  别的进程可能正在写自己的 .part——活跃下载每个 chunk 都会刷新 mtime，不会误伤。 */
+ *  别的进程可能正在写自己的 .part——活跃下载每个 chunk 都会刷新 mtime，不会误伤。
+ *  现行下载落在 tmp/（install / upgrade）；cache/ 仅清扫历史布局残留。 */
 const PART_STALE_MS = 60 * 60 * 1000;
 
-export function sweepStaleParts(): void {
+function sweepStalePartsIn(dir: string): void {
   let names: string[];
   try {
-    names = fs.readdirSync(paths.cache());
+    names = fs.readdirSync(dir);
   } catch {
     return;
   }
   const cutoff = Date.now() - PART_STALE_MS;
   for (const f of names) {
     if (!f.endsWith('.part')) continue;
-    const file = path.join(paths.cache(), f);
+    const file = path.join(dir, f);
     try {
       if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
     } catch {
       // 恰好消失或被占用：跳过
     }
   }
+}
+
+export function sweepStaleParts(): void {
+  sweepStalePartsIn(paths.cache());
+  sweepStalePartsIn(paths.tmp());
 }
 
 /** 安装目录内的架构戳：目录名不含 arch（`vendor-版本`），跨架构共享 SDKVM_HOME 时
@@ -388,7 +398,7 @@ export async function installCommand(
     log.info(`run: ${cmdPath(type)} use ${refinedUseHint(type, artifact.version, hintVersion)}`);
   };
 
-  // ---- 锁外阶段：只读全局状态、只写 cache/ 与 tmp/ 下的私有文件 ----
+  // ---- 锁外阶段：只读全局状态、只写 tmp/ 下的私有文件 ----
   // 下载/校验/解压不再持全局锁，长下载不再阻塞 use/uninstall/ls 和别的安装
   ensureLayout();
   if (installerMode) {

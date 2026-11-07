@@ -40,7 +40,10 @@ export function createProgress(label: string) {
     },
     done(bytes: number, total: number | null): void {
       if (isTty) {
-        process.stderr.write(`\r${label} ${humanBytes(bytes)}${total ? ` / ${humanBytes(total)}` : ''} ✓\n`);
+        // 与 update 同宽 padEnd：完成行更短时否则会留下进度条的尾部残影
+        process.stderr.write(
+          `\r${label} ${humanBytes(bytes)}${total ? ` / ${humanBytes(total)}` : ''} ✓`.padEnd(72) + '\n',
+        );
       } else if (bytes - lastLine >= 0) {
         process.stderr.write(`${label} ${humanBytes(bytes)} complete\n`);
       }

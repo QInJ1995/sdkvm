@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isProcessAlive } from '../core/lock.js';
 import { paths } from '../core/paths.js';
 import { detectPlatform } from '../core/platform.js';
 import { getSdkType } from '../sdk/index.js';
@@ -149,6 +150,47 @@ export function upsertRcContent(content: string, type: SdkTypeId, blockText?: st
   return `${stripped}${eol}${eol}${block}${eol}`;
 }
 
+/** 读 rc 旁路锁目录里的持有者 pid；缺失/损坏返回 null */
+function readRcLockPid(lockDir: string): number | null {
+  try {
+    const raw = fs.readFileSync(path.join(lockDir, 'pid'), 'utf8').trim();
+    const pid = Number(raw);
+    return Number.isInteger(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 偷过期/无主的 rc 旁路锁。与 core/lock.ts 同款：先 rename 再删，
+ * 禁止 rm+mkdir——两个等待者会先后删掉彼此刚建的新锁，双持锁写坏同一份 rc。
+ */
+function stealRcLock(lockDir: string): boolean {
+  const staging = `${lockDir}.stale-${process.pid}`;
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // rename 时再暴露
+  }
+  try {
+    fs.renameSync(lockDir, staging);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    throw err;
+  }
+  try {
+    fs.rmSync(staging, { recursive: true, force: true });
+  } catch {
+    // 残留无害：下次同 pid 偷锁会先清 staging
+  }
+  return true;
+}
+
+/** mkdir 与 pid 落盘之间被杀掉的无主锁：合法持有者毫秒级写完 pid，
+ *  短宽限期后再偷，避免两个并发 use 互相拆掉对方刚建的空锁目录 */
+const RC_ORPHAN_GRACE_MS = 2_000;
+
 /** 不同 SDKVM_HOME 的锁互不相干，却可能写同一份 rc。用目标文件旁的目录锁串行化读-改-写。 */
 function withRcFileLock(file: string, fn: () => void): void {
   const lockDir = `${file}.sdkvm-lock`;
@@ -159,15 +201,34 @@ function withRcFileLock(file: string, fn: () => void): void {
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
+      try {
+        // pid 落盘后释放才能核对归属；写失败必须回滚目录，否则留下无主锁
+        fs.writeFileSync(path.join(lockDir, 'pid'), `${process.pid}\n`);
+      } catch (err) {
+        try {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // 留给 stale / 死 pid 路径接管
+        }
+        throw err;
+      }
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-      try {
-        if (Date.now() - fs.statSync(lockDir).mtimeMs > 30_000) {
-          fs.rmSync(lockDir, { recursive: true, force: true });
-          continue;
+      const holder = readRcLockPid(lockDir);
+      let stale = holder != null && !isProcessAlive(holder);
+      if (!stale) {
+        try {
+          const age = Date.now() - fs.statSync(lockDir).mtimeMs;
+          // holder 未知：只等短宽限期（创建者已死 vs 还在写 pid）；
+          // holder 存活：目录超 30s 无心跳才按卡住处理
+          stale = holder == null ? age > RC_ORPHAN_GRACE_MS : age > 30_000;
+        } catch {
+          continue; // 锁目录恰好消失：直接重取
         }
-      } catch {
+      }
+      if (stale) {
+        stealRcLock(lockDir);
         continue;
       }
       if (Date.now() > deadline) {
@@ -179,30 +240,66 @@ function withRcFileLock(file: string, fn: () => void): void {
   try {
     fn();
   } finally {
+    // 先 rename 再核对 pid：直接 rm 会在"被别人偷走并转手"的窗口删掉新持有者的锁
+    const staging = `${lockDir}.rel-${process.pid}`;
     try {
-      fs.rmSync(lockDir, { recursive: true, force: true });
+      fs.renameSync(lockDir, staging);
     } catch {
-      // 残留锁按 30 秒龄被下一次接管
+      return;
     }
+    if (readRcLockPid(staging) === process.pid) {
+      try {
+        fs.rmSync(staging, { recursive: true, force: true });
+      } catch {
+        // 残留按死 pid / 龄被下一次接管
+      }
+    } else {
+      try {
+        fs.renameSync(staging, lockDir);
+      } catch {
+        // 对方已重建锁目录：staging 残留无害
+      }
+    }
+  }
+}
+
+/** 解析 rc 路径上的符号链接链（含悬空）：返回最终应写入的路径。 */
+function resolveRcWriteTarget(file: string): string {
+  // rc 常被 chezmoi/stow 做成符号链接：rename 会把链接本身换成普通文件，
+  // 脱离用户的 dotfile 管理。写透到链接目标（读侧 readFileSync 本来就跟随链接）。
+  // 悬空链接 realpathSync 会抛——被吞后按原路径 rename 会顶掉链接；逐层 readlink
+  // 拼出目标路径，即使目标尚未创建也写到那里（与 mrm writeSettings 同款）
+  try {
+    let cur = file;
+    for (let hops = 0; hops < 8; hops++) {
+      let st: fs.Stats;
+      try {
+        st = fs.lstatSync(cur);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return cur;
+        throw err;
+      }
+      if (!st.isSymbolicLink()) return cur;
+      cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+    }
+    return cur;
+  } catch {
+    return file;
   }
 }
 
 /** 原子写 rc：tmp+rename，避免 O_TRUNC 直接写在写一半崩溃时截断用户文件 */
 function writeRcAtomic(file: string, content: string): void {
-  // rc 常被 chezmoi/stow 等做成符号链接：rename 会把链接替换成普通文件，
-  // 脱离用户的 dotfile 管理。写透到链接目标（读侧 readFileSync 本来就跟随链接）
-  try {
-    if (fs.lstatSync(file).isSymbolicLink()) file = fs.realpathSync(file);
-  } catch {
-    // 不存在或目标读不出：按原路径写
-  }
+  file = resolveRcWriteTarget(file);
   const tmp = `${file}.sdkvm-tmp-${process.pid}`;
   let mode: number | undefined;
   try {
     mode = fs.statSync(file).mode & 0o777;
   } catch {
-    // 目标不存在（首次写入）：用默认权限
+    // 目标不存在（首次写入 / 悬空链接）：用默认权限
   }
+  // 悬空链接的目标目录可能还不存在（stow 尚未到位）：先建父目录
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   try {
     fs.writeFileSync(tmp, content, { mode });
     fs.renameSync(tmp, file);

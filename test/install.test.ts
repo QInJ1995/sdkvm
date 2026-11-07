@@ -108,17 +108,29 @@ describe('recoverInterruptedInstalls', () => {
 });
 
 describe('sweepStaleParts', () => {
-  function cacheFile(name: string): string {
-    const dir = path.join(home, 'cache');
+  function placePart(subdir: 'cache' | 'tmp', name: string): string {
+    const dir = path.join(home, subdir);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, name);
     fs.writeFileSync(file, 'x');
     return file;
   }
 
-  it('按龄清扫：过期 .part 删除、活跃 .part 保留', () => {
-    const stale = cacheFile('go1.24.5.tgz.tmp-111.part');
-    const fresh = cacheFile('go1.25.1.tgz.tmp-222.part');
+  it('按龄清扫 cache/：过期 .part 删除、活跃 .part 保留', () => {
+    const stale = placePart('cache', 'go1.24.5.tgz.tmp-111.part');
+    const fresh = placePart('cache', 'go1.25.1.tgz.tmp-222.part');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(stale, twoHoursAgo, twoHoursAgo);
+
+    sweepStaleParts();
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it('现行下载落在 tmp/：同样按龄清扫过期 .part', () => {
+    const stale = placePart('tmp', 'sdkvm-upgrade-111.tgz.tmp-111.part');
+    const fresh = placePart('tmp', `jdk-21.tar.gz.${process.pid}.tmp-${process.pid}.part`);
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
     fs.utimesSync(stale, twoHoursAgo, twoHoursAgo);
 
@@ -129,7 +141,7 @@ describe('sweepStaleParts', () => {
   });
 
   it('非 .part 的 cache 文件不参与清扫', () => {
-    const other = cacheFile('sdkvm.tgz');
+    const other = placePart('cache', 'sdkvm.tgz');
     const old = new Date(0);
     fs.utimesSync(other, old, old);
 
@@ -186,6 +198,25 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
     expect(fs.readFileSync(bin, 'utf8')).toBe('new');
     expect(fs.existsSync(bak)).toBe(false);
     expect(fs.existsSync(`${dir}.incomplete`)).toBe(false);
+  });
+
+  it('首次 installer（replacing:false、无 bak）成功后 settle 前被打断：保留完好新装', () => {
+    const dir = goDir('golang-1.24.5');
+    const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
+    const bin = path.join(dir, 'bin', binName);
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, 'fresh');
+    const marker = writeMarker(
+      dir,
+      JSON.stringify({ startedAt: 1, replacing: false, mode: 'installer' }),
+    );
+
+    recoverInterruptedInstalls('go');
+
+    // 旧逻辑会按半成品删掉 finalDir；installer 已落盘可执行文件时必须保留
+    expect(fs.existsSync(dir)).toBe(true);
+    expect(fs.readFileSync(bin, 'utf8')).toBe('fresh');
+    expect(fs.existsSync(marker)).toBe(false);
   });
 
   it('installer 模式 + bak + finalDir 并存：安装器直接写目录没有原子性，仍回滚旧版', () => {

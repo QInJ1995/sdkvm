@@ -141,9 +141,14 @@ function Lock-Acquire {
     try {
       New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
       $created = $true
+      # 与 CLI lock.ts / install.sh 对齐：info.json 写失败必须回滚删锁，
+      # 否则留下无 pid 的目录会被 CLI 按孤儿宽限期偷走 → 双持锁
       Set-Content -LiteralPath (Join-Path $lockDir 'info.json') -Encoding ascii -Value ('{"pid":' + $PID + ',"startedAt":' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + '}')
     } catch {
-      if ($created) { throw }
+      if ($created) {
+        Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue
+        throw
+      }
     }
     if ($created) { $script:LockHeld = $true; return }
     $holder = Read-LockHolder
