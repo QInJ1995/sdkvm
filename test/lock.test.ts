@@ -198,12 +198,13 @@ describe('lock', () => {
 });
 
 describe('acquireLock 异常路径', () => {
-  it('rolls back the fresh lock dir when writeLockInfo fails (no orphan wedge)', async () => {
+  it('rolls back the fresh lock dir when claimLockInfo fails (no orphan wedge)', async () => {
     const { acquireLock } = await freshLock();
     const orig = fs.writeFileSync.bind(fs) as (...args: unknown[]) => void;
     const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: unknown[]) => {
       const file = String(args[0]);
-      if (file.includes('.lock') && file.includes('.tmp-')) {
+      // 首次声明直接 wx 写 info.json（不再走 .tmp-）
+      if (file.includes('.lock') && file.endsWith(`${path.sep}info.json`)) {
         const err = new Error('ENOSPC: no space left on device, write') as NodeJS.ErrnoException;
         err.code = 'ENOSPC';
         throw err;
@@ -215,6 +216,18 @@ describe('acquireLock 异常路径', () => {
     // 无 pid、mtime 新鲜的锁目录会把本机楔到 STALE_MS：回滚后应立即可重取
     expect(fs.existsSync(path.join(home, '.lock'))).toBe(false);
     expect(() => acquireLock()).not.toThrow();
+  });
+
+  it('claim uses wx: existing info.json is not overwritten', async () => {
+    const { acquireLock, releaseLock } = await freshLock();
+    const dir = path.join(home, '.lock');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'info.json'), JSON.stringify({ pid: process.pid, startedAt: 1 }));
+    expect(() => acquireLock()).toThrow(/in progress/);
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'info.json'), 'utf8')).startedAt).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+    expect(() => acquireLock()).not.toThrow();
+    releaseLock();
   });
 
   it('steals an orphan lock (no info.json) past the short grace, not STALE_MS', async () => {

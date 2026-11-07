@@ -192,8 +192,10 @@ export const correttoVendor: Vendor = {
     const v = parseVersion('corretto', canonical);
     const url = resourceUrl(canonical, platform);
     if (spec.kind !== 'full' && !majorSha) {
-      // latest_sha256 端点拿不到哈希时无法核对：如实提示，不再挂已下线的 .sha256 死链
-      log.warn(`cannot fetch Corretto sha256 for ${canonical}, archive will be installed unverified`);
+      // 无 CL 的截断下载 + 跳过校验 = 装上坏 JDK。拿不到官方 sha 就 fail-closed
+      throw new SdkvmError(`Cannot fetch Corretto sha256 for ${canonical}`, {
+        hint: 'Retry later, or install an exact version: sdkvm java install <version> --vendor corretto',
+      });
     }
     return {
       vendorId: 'corretto',
@@ -204,11 +206,9 @@ export const correttoVendor: Vendor = {
       // major/lts 用 latest_sha256 的官方值。精确版本走 release 说明里的 sha256；
       // 该 tag 不存在时安装阶段警告并跳过，不再把校验直接留空。
       checksum:
-        spec.kind !== 'full' && majorSha
-          ? { kind: 'sha256', expected: majorSha }
-          : spec.kind === 'full'
-            ? { kind: 'sha256', url: releaseChecksumUrl(canonical) }
-            : null,
+        spec.kind !== 'full'
+          ? { kind: 'sha256', expected: majorSha! }
+          : { kind: 'sha256', url: releaseChecksumUrl(canonical) },
       archive: platform.os === 'windows' ? 'zip' : 'tar.gz',
     };
   },

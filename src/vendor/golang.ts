@@ -1,6 +1,7 @@
 import type { ReleaseLine, ResolvedArtifact, Vendor, VendorPlatform, VersionSpec } from './types.js';
 import { httpJson } from '../net/http.js';
 import { SdkvmError } from '../util/errors.js';
+import { hostLibc } from '../core/platform.js';
 import { compareVersions, formatGoVersion, parseGoVersion, type SdkVersion } from '../core/version.js';
 import { cmdPath } from '../cli/cmdname.js';
 import { groupMinorLines, specLabel } from './shared.js';
@@ -87,6 +88,12 @@ export const golangVendor: Vendor = {
   },
 
   async resolve(spec, platform): Promise<ResolvedArtifact> {
+    // 官方只发 glibc Linux 归档；musl 上会"装成功"但一跑就 loader 失败（与 flutter/python 同款）
+    if (platform.os === 'linux' && hostLibc(platform.arch) === 'musl') {
+      throw new SdkvmError('Official Go archives are glibc-only; musl Linux (Alpine) is not supported', {
+        hint: 'Use the distro package (apk add go), or install a musl toolchain outside this tool',
+      });
+    }
     if (spec.kind === 'lts' || spec.kind === 'major') {
       // go 语法不会产出 lts/major（java 专用），防御性拒绝
       throw new SdkvmError(`Unsupported version spec for Go: ${spec.kind}`);

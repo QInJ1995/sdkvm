@@ -4,6 +4,7 @@ import { minicondaVendor } from '../src/vendor/miniconda.js';
 import { nodejsVendor } from '../src/vendor/nodejs.js';
 import { correttoVendor } from '../src/vendor/corretto.js';
 import { flutterVendor } from '../src/vendor/flutter.js';
+import { golangVendor } from '../src/vendor/golang.js';
 import { temurinVendor } from '../src/vendor/temurin.js';
 
 // 文件级 mock：hostLibc 恒报 musl（模拟 Alpine 等 musl 主机），其余 platform 行为原样。
@@ -34,6 +35,10 @@ describe('musl 主机守卫（glibc-only 基线在解析期拒绝）', () => {
 
   it('flutter rejects musl before any network call', async () => {
     await expect(flutterVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
+  });
+
+  it('golang rejects musl before any network call', async () => {
+    await expect(golangVendor.resolve({ kind: 'latest' }, LINUX_X64)).rejects.toThrow(/musl/i);
   });
 
   it('corretto on musl resolves the official alpine tarball, not the glibc one', async () => {

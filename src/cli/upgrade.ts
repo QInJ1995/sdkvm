@@ -266,6 +266,12 @@ export async function upgradeCommand(): Promise<void> {
     fs.rmSync(statusFile, { force: true });
     if (prev === 'rollback' || prev === 'rollbackfail') {
       log.warn('the previous scheduled upgrade did not complete (it rolled back); retrying it now');
+      // rollbackfail 故意留下 upgrade-apply.cmd；不删的话持锁后又因"already scheduled"拒绝，永远卡死
+      try {
+        fs.rmSync(path.join(sdkvmHome(), 'upgrade-apply.cmd'), { force: true });
+      } catch {
+        // 删不掉时后面的 pending 检查仍会给出手工删除提示
+      }
     }
   } catch {
     // 无状态文件：上次升级成功或从未计划过

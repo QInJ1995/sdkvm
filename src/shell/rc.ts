@@ -230,11 +230,16 @@ function withRcFileLock(file: string, fn: () => void): void {
         // EEXIST 说明目录里已有别人的声明——绝不能 rm 整个 lockDir
         fs.writeFileSync(path.join(lockDir, 'pid'), `${process.pid}\n`, { flag: 'wx' });
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+        const code = (err as NodeJS.ErrnoException).code;
+        // EEXIST：别人已声明；ENOENT：目录已被 steal 挪走。都不能盲 rm
+        if (code === 'EEXIST' || code === 'ENOENT') {
           continue;
         }
         try {
-          fs.rmSync(lockDir, { recursive: true, force: true });
+          const holder = readRcLockPid(lockDir);
+          if (holder == null || holder === process.pid) {
+            fs.rmSync(lockDir, { recursive: true, force: true });
+          }
         } catch {
           // 留给 stale / 死 pid 路径接管
         }

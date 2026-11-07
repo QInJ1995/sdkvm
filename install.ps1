@@ -141,16 +141,24 @@ function Lock-Acquire {
     try {
       New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
       $created = $true
-      # 与 CLI lock.ts / install.sh 对齐：info.json 写失败必须回滚删锁，
-      # 否则留下无 pid 的目录会被 CLI 按孤儿宽限期偷走 → 双持锁
-      Set-Content -LiteralPath (Join-Path $lockDir 'info.json') -Encoding ascii -Value ('{"pid":' + $PID + ',"startedAt":' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + '}')
+      # 与 CLI lock.ts / install.sh 对齐：New-Item 文件 = 独占声明（已存在则失败）。
+      # 非独占 Set-Content 会在 orphan steal 后盖掉新持有者的 info → 双持锁
+      $infoPath = Join-Path $lockDir 'info.json'
+      New-Item -ItemType File -Path $infoPath -ErrorAction Stop | Out-Null
+      Set-Content -LiteralPath $infoPath -Encoding ascii -Value ('{"pid":' + $PID + ',"startedAt":' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + '}')
     } catch {
       if ($created) {
-        Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue
-        throw
+        $holder = Read-LockHolder
+        if ($holder -eq 0 -or $holder -eq $PID) {
+          Remove-Item -Recurse -Force $lockDir -ErrorAction SilentlyContinue
+        }
+        # 别人已声明：勿抛、勿盲删，落入下方等待/偷锁
       }
     }
-    if ($created) { $script:LockHeld = $true; return }
+    if ($created -and (Test-Path -LiteralPath (Join-Path $lockDir 'info.json')) -and ((Read-LockHolder) -eq $PID)) {
+      $script:LockHeld = $true
+      return
+    }
     $holder = Read-LockHolder
     $alive = Test-PidAlive $holder
     if (-not $alive) {

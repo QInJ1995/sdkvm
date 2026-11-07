@@ -52,6 +52,33 @@ describe('extractExpectedChecksum', () => {
     ).toBe(hash);
   });
 
+  it('prefers the JSON entry whose package.link matches artifactName', () => {
+    const want = 'a'.repeat(64);
+    const decoy = 'b'.repeat(64);
+    const name = 'OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz';
+    const payload = [
+      {
+        binary: {
+          package: {
+            checksum: decoy,
+            link: 'https://example.com/OpenJDK21U-jdk_x64_mac_hotspot_21.0.5_11.tar.gz',
+          },
+        },
+      },
+      {
+        binary: {
+          package: {
+            checksum: want,
+            link: `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/${name}`,
+          },
+        },
+      },
+    ];
+    expect(extractExpectedChecksum(JSON.stringify(payload), 'sha256', name)).toBe(want);
+    // 无 artifactName 时仍取第一条（兼容旧调用）
+    expect(extractExpectedChecksum(JSON.stringify(payload))).toBe(decoy);
+  });
+
   it('reads the sha256 published next to an artifact name in a release body', () => {
     const name = 'amazon-corretto-21.0.4.7.1-linux-x64.tar.gz';
     const sha = 'ab'.repeat(32);

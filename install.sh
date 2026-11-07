@@ -87,15 +87,18 @@ lock_acquire() {
   tries=0
   while :; do
     if mkdir "$ROOT/.lock" 2>/dev/null; then
-      # 与 CLI lock.ts 对齐：info.json 写失败必须回滚删锁，否则留下无 pid 的目录
-      # 会被 CLI 按孤儿宽限期偷走，形成脚本与 sdkvm upgrade 双持锁
-      if ! printf '{"pid":%s,"startedAt":%s}\n' "$$" "$(date +%s000)" >"$ROOT/.lock/info.json" 2>/dev/null; then
-        rm -rf "$ROOT/.lock" 2>/dev/null || :
-        echo "sdkvm: cannot write $ROOT/.lock/info.json; check disk space and permissions" >&2
-        exit 1
+      # 与 CLI lock.ts 对齐：wx/noclobber 独占声明。非独占写会在 orphan steal 后盖掉
+      # 新持有者的 info → 双持锁；写失败也绝不能盲 rm 别人的锁
+      if (set -C; printf '{"pid":%s,"startedAt":%s}\n' "$$" "$(date +%s000)" >"$ROOT/.lock/info.json") 2>/dev/null; then
+        LOCK_HELD=1
+        return 0
       fi
-      LOCK_HELD=1
-      return 0
+      holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
+      if [ -z "$holder" ] || [ "$holder" = "$$" ]; then
+        rm -rf "$ROOT/.lock" 2>/dev/null || :
+        # 无主且写不进：多半是磁盘/权限；继续重试，满 tries 后统一报错
+      fi
+      # holder 是别人：目录已被 steal 重建，勿 rm，落入下方等待
     fi
     holder=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$ROOT/.lock/info.json" 2>/dev/null || :)
     if lock_owner_alive "$holder"; then

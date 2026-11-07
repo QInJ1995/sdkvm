@@ -35,11 +35,20 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+function lockInfoBody(startedAt: number): string {
+  return JSON.stringify({ pid: process.pid, startedAt, heartbeatAt: Date.now() });
+}
+
+/** 首次独占声明持有：必须 wx。tmp+rename 在 orphan steal 后会盖掉新持有者的 info → 双持锁 */
+function claimLockInfo(startedAt: number): void {
+  fs.writeFileSync(lockInfoPath(), lockInfoBody(startedAt), { flag: 'wx' });
+}
+
 function writeLockInfo(startedAt: number): void {
-  // tmp+rename 原子写：mkdir 之后、info.json 写完之前崩溃，等待者会误判 holder 未知而白等 STALE_MS
+  // 心跳续约仍用 tmp+rename：持有者已独占，覆盖自己的 info 即可
   const file = lockInfoPath();
   const tmp = `${file}.tmp-${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, startedAt, heartbeatAt: Date.now() }));
+  fs.writeFileSync(tmp, lockInfoBody(startedAt));
   fs.renameSync(tmp, file);
 }
 
@@ -168,16 +177,28 @@ export function acquireLock(): void {
     try {
       fs.mkdirSync(lockDir);
       try {
-        writeLockInfo(Date.now());
+        claimLockInfo(Date.now());
       } catch (err) {
-        // 刚建出的目录写不进 info.json（磁盘满/杀软拦截新目录）：回滚删掉，
-        // 否则留下一个无 pid、mtime 新鲜的锁目录，把本机所有操作楔到 STALE_MS
+        const code = (err as NodeJS.ErrnoException).code;
+        // EEXIST：orphan steal 后别人已在同路径声明；ENOENT：目录已被挪走。
+        // 绝不能盲 rm——会拆掉新持有者的锁
+        if (code === 'EEXIST' || code === 'ENOENT') {
+          continue;
+        }
+        // 磁盘满等：仅当仍无主或仍是本 pid 时回滚，否则留给对方
         try {
-          fs.rmSync(lockDir, { recursive: true, force: true });
+          const p = readLockPid();
+          if (p == null || p === process.pid) {
+            fs.rmSync(lockDir, { recursive: true, force: true });
+          }
         } catch {
-          // 删不掉只能留给 stale 兜底（与被 SIGKILL 的窗口同款下场）
+          // 删不掉只能留给 stale 兜底
         }
         throw err;
+      }
+      // 写完复核：steal 窗口里目录可能已被换走再重建
+      if (readLockPid() !== process.pid) {
+        continue;
       }
       sweepStaleStaging(lockDir);
       heldDepth = 1;

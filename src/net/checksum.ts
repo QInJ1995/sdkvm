@@ -21,11 +21,48 @@ function hex64(value: unknown): string | null {
   return hexOf(value, 'sha256');
 }
 
-/** GitHub 资产 `.json` 与 Adoptium release API（对象或数组，哈希在 package.checksum）共用。 */
-function checksumFromJson(value: unknown): string | null {
+/** 从 Adoptium/GitHub JSON 节点收集可能的下载链接（用于按 artifact 名挑对那条 checksum） */
+function jsonDownloadLinks(value: unknown, out: string[] = []): string[] {
+  if (!value || typeof value !== 'object') return out;
   if (Array.isArray(value)) {
+    for (const item of value) jsonDownloadLinks(item, out);
+    return out;
+  }
+  const obj = value as Record<string, unknown>;
+  for (const key of ['link', 'download_url', 'url', 'href']) {
+    const v = obj[key];
+    if (typeof v === 'string' && v.length > 0) out.push(v);
+  }
+  for (const nested of [obj.package, obj.binary, obj.binaries]) {
+    jsonDownloadLinks(nested, out);
+  }
+  return out;
+}
+
+function linkMatchesArtifact(link: string, artifactName: string): boolean {
+  try {
+    const base = decodeURIComponent(link.split(/[?#]/)[0] ?? '').split('/').pop() ?? '';
+    return base === artifactName;
+  } catch {
+    return link.endsWith(`/${artifactName}`) || link.endsWith(artifactName);
+  }
+}
+
+/** GitHub 资产 `.json` 与 Adoptium release API（对象或数组，哈希在 package.checksum）共用。
+ *  有 artifactName 时优先匹配 package.link 等指向该资产的条目，避免数组里第一条是别的包。 */
+function checksumFromJson(value: unknown, artifactName?: string): string | null {
+  if (Array.isArray(value)) {
+    if (artifactName) {
+      for (const item of value) {
+        const links = jsonDownloadLinks(item);
+        if (links.some((l) => linkMatchesArtifact(l, artifactName))) {
+          const hit = checksumFromJson(item, artifactName);
+          if (hit) return hit;
+        }
+      }
+    }
     for (const item of value) {
-      const hit = checksumFromJson(item);
+      const hit = checksumFromJson(item, artifactName);
       if (hit) return hit;
     }
     return null;
@@ -39,6 +76,24 @@ function checksumFromJson(value: unknown): string | null {
     binary?: unknown;
     binaries?: unknown;
   };
+  // 带 artifactName 且本节点有链接但不匹配时，不要取本层 checksum（可能是 sibling 资产的包装）
+  if (artifactName) {
+    const links = jsonDownloadLinks(value);
+    if (links.length > 0 && !links.some((l) => linkMatchesArtifact(l, artifactName))) {
+      // 仍向下钻 binaries/package：父节点常挂无关 link
+      if (Array.isArray(obj.binaries)) {
+        for (const binary of obj.binaries) {
+          const hit = checksumFromJson(binary, artifactName);
+          if (hit) return hit;
+        }
+      }
+      for (const nested of [obj.package, obj.binary]) {
+        const hit = checksumFromJson(nested, artifactName);
+        if (hit) return hit;
+      }
+      return null;
+    }
+  }
   const direct = hex64(obj.checksum) ?? hex64(obj.sha256);
   if (direct) return direct;
   if (Array.isArray(obj.hashes)) {
@@ -53,12 +108,12 @@ function checksumFromJson(value: unknown): string | null {
     }
   }
   for (const nested of [obj.package, obj.binary]) {
-    const hit = checksumFromJson(nested);
+    const hit = checksumFromJson(nested, artifactName);
     if (hit) return hit;
   }
   if (Array.isArray(obj.binaries)) {
     for (const binary of obj.binaries) {
-      const hit = checksumFromJson(binary);
+      const hit = checksumFromJson(binary, artifactName);
       if (hit) return hit;
     }
   }
@@ -114,7 +169,7 @@ export function extractExpectedChecksum(
   if (kind === 'sha256' && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      const hit = checksumFromJson(parsed);
+      const hit = checksumFromJson(parsed, artifactName);
       if (hit) return hit;
       // Corretto 精确版本：GitHub release JSON 的 body 在对应文件名后给出 sha256
       const body =
