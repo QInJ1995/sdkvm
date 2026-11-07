@@ -29,15 +29,30 @@ case "$os:$arch" in
   *) echo "sdkvm: unsupported platform $os/$arch" >&2; exit 1 ;;
 esac
 
-# bootstrap 拉的是官方 glibc Node 归档。musl 主机（Alpine 等）装上即 loader 失败；
-# 官方 musl 构建要到更高 major，且与本脚本钉死的 runtime 版本无关——直接拒绝并给出路
+# bootstrap 拉的是官方 glibc Node 归档。真正的 musl 主机（Alpine 等）装上即 loader 失败。
+# 不能只看 ld-musl 是否存在：Debian/Ubuntu 的 musl 包也会装 loader，主机仍是 glibc。
+# 与 CLI hostLibc 同序：alpine-release → 无 ld-linux* 且有 ld-musl → 拒绝
 if [ "$node_os" = linux ]; then
-  musl_loader=
-  case "$node_arch" in
-    arm64) musl_loader=/lib/ld-musl-aarch64.so.1 ;;
-    *) musl_loader=/lib/ld-musl-x86_64.so.1 ;;
-  esac
-  if [ -e "$musl_loader" ] || [ -e "/usr/lib/$(basename "$musl_loader")" ] || [ -f /etc/alpine-release ]; then
+  is_musl_host=0
+  if [ -f /etc/alpine-release ]; then
+    is_musl_host=1
+  else
+    case "$node_arch" in
+      arm64)
+        gnu_loader=/lib/ld-linux-aarch64.so.1
+        musl_loader=/lib/ld-musl-aarch64.so.1
+        ;;
+      *)
+        gnu_loader=/lib64/ld-linux-x86-64.so.2
+        musl_loader=/lib/ld-musl-x86_64.so.1
+        ;;
+    esac
+    if [ ! -e "$gnu_loader" ] && [ ! -e "/lib/$(basename "$gnu_loader")" ] && \
+       { [ -e "$musl_loader" ] || [ -e "/usr/lib/$(basename "$musl_loader")" ]; }; then
+      is_musl_host=1
+    fi
+  fi
+  if [ "$is_musl_host" = 1 ]; then
     echo "sdkvm: musl/Alpine hosts are not supported by this bootstrap installer" >&2
     echo "sdkvm: it downloads a glibc Node.js runtime that will not start here" >&2
     echo "sdkvm: install a distro Node.js (>=18.17), then: npm install -g sdkvm" >&2
@@ -88,9 +103,18 @@ lock_acquire() {
     elif [ -n "$holder" ]; then
       # pid 已死：不等 mtime，立即偷（OOM-kill/断电后 5 分钟内也放行安装）
       lock_steal
-    elif [ -z "$(find "$ROOT/.lock" -prune -mmin -5 2>/dev/null)" ]; then
-      # info.json 缺失且目录超 5 分钟无变动：创建者死在 mkdir 与写 info 之间的无主锁
-      lock_steal
+    elif [ -z "$holder" ]; then
+      # info.json 缺失：创建者死在 mkdir 与写 info 之间。CLI 的 ORPHAN_GRACE 约 5s；
+      # 这里用秒级 mtime，避免再白等满 5 分钟才放行并发 bootstrap
+      lock_age=
+      if lock_mtime=$(stat -f %m "$ROOT/.lock" 2>/dev/null); then
+        lock_age=$(( $(date +%s) - lock_mtime ))
+      elif lock_mtime=$(stat -c %Y "$ROOT/.lock" 2>/dev/null); then
+        lock_age=$(( $(date +%s) - lock_mtime ))
+      fi
+      if [ -n "$lock_age" ] && [ "$lock_age" -ge 5 ]; then
+        lock_steal
+      fi
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 60 ]; then

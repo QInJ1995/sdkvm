@@ -13,6 +13,7 @@ let stamps: Map<string, string>;
 let realShell: string | undefined;
 let realJavaHome: string | undefined;
 let realSdkvmHome: string | undefined;
+let realXdgConfigHome: string | undefined;
 
 function stamp(file: string): string {
   try {
@@ -53,8 +54,10 @@ describe.skipIf(process.platform === 'win32')('useCommand 写入 shell rc', () =
     realShell = process.env.SHELL;
     realJavaHome = process.env.JAVA_HOME;
     realSdkvmHome = process.env.SDKVM_HOME;
+    realXdgConfigHome = process.env.XDG_CONFIG_HOME;
     process.env.SDKVM_HOME = sdkHome;
     delete process.env.JAVA_HOME;
+    delete process.env.XDG_CONFIG_HOME;
     process.exitCode = undefined;
     vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
   });
@@ -73,6 +76,8 @@ describe.skipIf(process.platform === 'win32')('useCommand 写入 shell rc', () =
       else process.env.JAVA_HOME = realJavaHome;
       if (realSdkvmHome === undefined) delete process.env.SDKVM_HOME;
       else process.env.SDKVM_HOME = realSdkvmHome;
+      if (realXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = realXdgConfigHome;
       fs.rmSync(fakeHome, { recursive: true, force: true });
     }
   });
@@ -94,6 +99,39 @@ describe.skipIf(process.platform === 'win32')('useCommand 写入 shell rc', () =
     expect(fs.existsSync(path.join(fakeHome, '.zshrc'))).toBe(false);
     expect(fs.lstatSync(path.join(sdkHome, 'current-java')).isSymbolicLink()).toBe(true);
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('fish 尊重 XDG_CONFIG_HOME，不写死 ~/.config', async () => {
+    process.env.SHELL = '/usr/local/bin/fish';
+    const xdg = path.join(fakeHome, 'xdg-config');
+    process.env.XDG_CONFIG_HOME = xdg;
+    installJava(sdkHome);
+    await useCommand('java', '21', {});
+
+    const rc = path.join(xdg, 'fish', 'config.fish');
+    expect(fs.existsSync(rc)).toBe(true);
+    expect(fs.readFileSync(rc, 'utf8')).toContain('set -gx JAVA_HOME');
+    expect(fs.existsSync(path.join(fakeHome, '.config', 'fish', 'config.fish'))).toBe(false);
+  });
+
+  it('fish 改过 XDG 后卸载仍清掉历史 config 里的块', async () => {
+    process.env.SHELL = '/usr/local/bin/fish';
+    const oldXdg = path.join(fakeHome, 'old-xdg');
+    process.env.XDG_CONFIG_HOME = oldXdg;
+    installJava(sdkHome);
+    await useCommand('java', '21', {});
+    const oldRc = path.join(oldXdg, 'fish', 'config.fish');
+    expect(fs.readFileSync(oldRc, 'utf8')).toContain(rcBegin('java'));
+    fs.appendFileSync(oldRc, 'set -gx USER_STUFF 1\n');
+
+    // 卸载时 XDG 已换到别处：只靠当前 rcCandidates 扫不到旧路径
+    delete process.env.XDG_CONFIG_HOME;
+    process.env.SHELL = '/bin/zsh';
+    await uninstallCommand('java', '21', {});
+
+    const text = fs.readFileSync(oldRc, 'utf8');
+    expect(text).not.toContain(rcBegin('java'));
+    expect(text).toContain('set -gx USER_STUFF 1');
   });
 
   it('zsh 把含 ! 的路径写成单引号字面量', async () => {

@@ -156,8 +156,10 @@ function Lock-Acquire {
     if (-not $alive) {
       $orphanStale = $false
       if ($holder -eq 0) {
+        # 与 CLI ORPHAN_GRACE / install.sh 对齐：无 info 的无主锁约 5 秒后可偷，
+        # 不再白等满 5 分钟
         try {
-          $orphanStale = ((Get-Item -LiteralPath $lockDir -Force).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddMinutes(-5))
+          $orphanStale = ((Get-Item -LiteralPath $lockDir -Force).LastWriteTimeUtc -lt [DateTime]::UtcNow.AddSeconds(-5))
         } catch {}
       }
       if ($holder -gt 0 -or $orphanStale) {

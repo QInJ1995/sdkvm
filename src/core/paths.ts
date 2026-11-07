@@ -23,6 +23,8 @@ export const paths = {
   tmp: () => path.join(sdkvmHome(), 'tmp'),
   config: () => path.join(sdkvmHome(), 'config.json'),
   lock: () => path.join(sdkvmHome(), '.lock'),
+  /** 写过的 shell rc 绝对路径列表（卸载时扫历史 XDG fish 等） */
+  rcTouched: () => path.join(sdkvmHome(), 'rc-touched.json'),
 };
 
 export function ensureLayout(): void {

@@ -13,6 +13,7 @@ import {
   stripRcBlock,
   upsertRcContent,
   upsertRcFile,
+  rememberedRcPaths,
 } from '../src/shell/rc.js';
 import { detectPlatform } from '../src/core/platform.js';
 import { getSdkType } from '../src/sdk/index.js';
@@ -393,6 +394,23 @@ describe.skipIf(process.platform === 'win32')('rc 符号链接', () => {
   });
 });
 
+describe('rc-touched 历史路径', () => {
+  it('upsert 后记入 SDKVM_HOME，供卸载扫历史 XDG', () => {
+    const sdkHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-touch-home-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-touch-'));
+    process.env.SDKVM_HOME = sdkHome;
+    try {
+      const file = path.join(dir, 'xdg-config', 'fish', 'config.fish');
+      upsertRcFile(file, 'java');
+      expect(rememberedRcPaths()).toContain(path.resolve(file));
+      expect(fs.readFileSync(path.join(sdkHome, 'rc-touched.json'), 'utf8')).toContain('config.fish');
+    } finally {
+      fs.rmSync(sdkHome, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('rc 旁路锁', () => {
   it('持锁目录写入 pid，释放后锁目录消失', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-lock-'));
@@ -427,6 +445,55 @@ describe('rc 旁路锁', () => {
       expect(fs.existsSync(lockDir)).toBe(false);
       expect(fs.readFileSync(file, 'utf8')).toContain(rcBegin('java'));
       expect(fs.readFileSync(file, 'utf8')).toContain('export A=1');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it(
+    'pid 用 wx 独占：锁目录里已有活持有者的 pid 时不会盖写',
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-wx-'));
+      const file = path.join(dir, '.zshrc');
+      const lockDir = `${file}.sdkvm-lock`;
+      try {
+        fs.writeFileSync(file, 'export A=1\n');
+        fs.mkdirSync(lockDir);
+        // 活着的占位 pid：本进程。持有者不被偷；upsert 应超时而非盖写 pid
+        fs.writeFileSync(path.join(lockDir, 'pid'), `${process.pid}\n`);
+        expect(() => upsertRcFile(file, 'java')).toThrow(/timed out waiting to update/);
+        expect(fs.readFileSync(path.join(lockDir, 'pid'), 'utf8').trim()).toBe(String(process.pid));
+        expect(fs.readFileSync(file, 'utf8')).toBe('export A=1\n');
+      } finally {
+        try {
+          fs.rmSync(lockDir, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
+  it('持锁时清掉死 pid 的 .stale- / .rel- 残留', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkvm-rc-sweep-'));
+    const file = path.join(dir, '.zshrc');
+    try {
+      const dead = Number(
+        execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))']).toString(),
+      );
+      const stale = `${file}.sdkvm-lock.stale-${dead}`;
+      const rel = `${file}.sdkvm-lock.rel-${dead}`;
+      fs.mkdirSync(stale);
+      fs.mkdirSync(rel);
+      fs.writeFileSync(file, 'export A=1\n');
+
+      upsertRcFile(file, 'java');
+
+      expect(fs.existsSync(stale)).toBe(false);
+      expect(fs.existsSync(rel)).toBe(false);
+      expect(fs.readFileSync(file, 'utf8')).toContain(rcBegin('java'));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

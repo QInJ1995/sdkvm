@@ -82,19 +82,27 @@ function redactProxy(value: string): string {
 }
 
 let proxyAgent: EnvHttpProxyAgent | null | undefined;
+/** 与当前 http/https 代理环境指纹绑定：环境变了必须重建，失败也不能把 null 粘到修好之后 */
+let proxyAgentKey: string | undefined;
 
-/** 惰性建进程级单例；初始化失败（坏变量值）退回直连并提示，不让用户误以为代理在工作 */
+function proxyEnvFingerprint(): string {
+  return `${envProxyFor('http') ?? ''}\0${envProxyFor('https') ?? ''}`;
+}
+
+/** 按环境指纹缓存 Agent；初始化失败退回直连并提示，不让用户误以为代理在工作 */
 function getProxyAgent(): EnvHttpProxyAgent | null {
-  if (proxyAgent === undefined) {
-    silenceEhpaWarning();
-    const httpProxy = envProxyFor('http');
-    const httpsProxy = envProxyFor('https');
-    try {
-      proxyAgent = new EnvHttpProxyAgent({ httpProxy, httpsProxy });
-    } catch (err) {
-      proxyAgent = null;
-      log.warn(`ignoring the proxy environment variables (${(err as Error).message}); connecting directly`);
-    }
+  const key = proxyEnvFingerprint();
+  if (proxyAgent !== undefined && proxyAgentKey === key) return proxyAgent;
+  silenceEhpaWarning();
+  const httpProxy = envProxyFor('http');
+  const httpsProxy = envProxyFor('https');
+  try {
+    proxyAgent = new EnvHttpProxyAgent({ httpProxy, httpsProxy });
+    proxyAgentKey = key;
+  } catch (err) {
+    proxyAgent = null;
+    proxyAgentKey = key;
+    log.warn(`ignoring the proxy environment variables (${(err as Error).message}); connecting directly`);
   }
   return proxyAgent;
 }

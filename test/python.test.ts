@@ -269,4 +269,24 @@ describe('full 规格回退历史 release 标签', () => {
       /No Python release matches/,
     );
   });
+
+  it('最新快照他平台有、本平台没有时仍回退历史 tag（不误报平台缺失）', async () => {
+    // 最新 SUMS 里 3.10.16 只有 linux；历史 tag 有 mac —— 以前 existsElsewhere 会先抛
+    const OLD_MAC = `cpython-3.10.16+${OLD_TAG}-aarch64-apple-darwin-install_only_stripped.tar.gz`;
+    const histSums = [asset(OLD_MAC, SHA.old)].join('\n');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.endsWith('latest-release.json')) return new Response(LATEST_JSON, { status: 200 });
+        if (u === `${PREFIX}/SHA256SUMS`) return new Response(SUMS, { status: 200 });
+        if (u.startsWith('https://api.github.com/')) return Response.json([{ tag_name: OLD_TAG }]);
+        if (u === `${oldPrefix}/SHA256SUMS`) return new Response(histSums, { status: 200 });
+        throw new Error(`unexpected ${u}`);
+      }),
+    );
+    const artifact = await cpythonVendor.resolve({ kind: 'full', version: '3.10.16' }, MAC);
+    expect(artifact.downloadUrl).toBe(`${oldPrefix}/${OLD_MAC}`);
+    expect(artifact.checksum).toEqual({ kind: 'sha256', expected: SHA.old });
+  });
 });

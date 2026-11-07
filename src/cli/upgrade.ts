@@ -285,8 +285,9 @@ export async function upgradeCommand(): Promise<void> {
   // 顺手清掉历史下载残留：按龄清 .part（cache 旧布局 + tmp），再按死 pid 清 tmp 归档
   sweepStaleParts();
   sweepStaleTmp();
-  // 带 pid：两个 upgrade 同时下载时不再互相覆盖、互相删除同一份 tmp 归档
-  const dest = path.join(paths.tmp(), `sdkvm-upgrade-${process.pid}.tgz`);
+  // 带 pid、无固定扩展名：与 downloadDestName 同款，sweepStaleTmp 能按死 pid 清掉
+  // （旧名 sdkvm-upgrade-<pid>.tgz 以 .tgz 结尾，正则匹配不上，只能靠 2h 龄）
+  const dest = path.join(paths.tmp(), `sdkvm-upgrade.${process.pid}`);
   try {
     const downloaded = await downloadFile(assetUrl, dest);
     if (downloaded.sha256 !== expected) {

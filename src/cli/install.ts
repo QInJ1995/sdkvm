@@ -85,12 +85,18 @@ function writeIncompleteMarker(incomplete: string, replacing: boolean, mode: Ins
 
 /** 安装成功后撤下标记。先把标记改写成 settled:true，再尝试删除。
  *  删文件可能被杀软拒绝，但覆盖通常还能成功：恢复路径看到 settled 就只清标记、不回滚。
- *  若连覆盖也失败，盘上仍是「进行中」标记，installer 恢复会在目录已含可执行文件时保留新装。 */
+ *  若连覆盖也失败，降级尝试直接删——删掉后 registry 同样可见。 */
 function settleMarkerQuietly(incomplete: string, mode: InstallMode): void {
   try {
     fs.writeFileSync(incomplete, JSON.stringify({ startedAt: Date.now(), replacing: true, mode, settled: true }));
   } catch (err) {
-    log.warn(`installed, but could not mark ${incomplete} settled: ${(err as Error).message}`);
+    log.warn(`could not mark ${incomplete} settled: ${(err as Error).message}`);
+    // 写 settled 失败时仍尽量删掉进行中标记，避免完好安装被 registry 永久隐藏
+    try {
+      fs.rmSync(incomplete, { force: true });
+    } catch {
+      // 删也失败：只能留下，下次恢复再认
+    }
     return;
   }
   try {
@@ -100,13 +106,17 @@ function settleMarkerQuietly(incomplete: string, mode: InstallMode): void {
   }
 }
 
-/** 安装器没有原子换位。标记仍是「进行中」但 prefix 里已经有可执行文件时，
- *  视为安装器已成功、只是收尾标记没改成 settled，保留新目录。 */
-function installerLooksComplete(finalDir: string, type: SdkTypeId): boolean {
+/** 安装器成功收尾戳：只在 runSilentInstaller + normalize 都通过后写入。
+ *  恢复时认这个戳，不认裸 bin——安装器中途被杀时 conda 往往已落盘但环境不完整。 */
+const INSTALLER_OK_STAMP = '.sdkvm-installed';
+
+function writeInstallerOkStamp(finalDir: string): void {
+  fs.writeFileSync(path.join(finalDir, INSTALLER_OK_STAMP), `${Date.now()}\n`);
+}
+
+function installerOkStampPresent(finalDir: string): boolean {
   try {
-    const spec = getSdkType(type);
-    const platform = detectPlatform();
-    return fs.existsSync(path.join(spec.locateHome(finalDir), spec.binRelPath(platform)));
+    return fs.existsSync(path.join(finalDir, INSTALLER_OK_STAMP));
   } catch {
     return false;
   }
@@ -145,40 +155,55 @@ function recoverInterrupted(finalDir: string, type: SdkTypeId): void {
   try {
     if (settled) {
       // 上次安装其实成功了，只是标记删不掉：finalDir 完好，只清残留
-      try {
-        fs.rmSync(incomplete, { force: true });
-      } catch {
-        // 仍删不掉：保持 settled 标记，不再重复告警
-      }
+      settleMarkerQuietly(incomplete, mode ?? 'archive');
       removeBackupQuietly(bak);
       return;
     }
+    // 凡是"保留 finalDir 可见"的分支，标记必须先 settled 再删：
+    // 裸 rm 被杀软拒绝时，未 settled 的 .incomplete 会让 registry 继续把完好安装藏起来
+    let keepVisible = false;
     if (fs.existsSync(bak)) {
       if (mode === 'archive' && fs.existsSync(finalDir)) {
         // 归档换位是一次原子 rename：finalDir 在即新装已完整落位，
         // 中断只发生在收尾清理。保留新装、清掉 bak
         log.warn(`an earlier install of ${name} had completed; kept it and dropped the leftover backup`);
         removeBackupQuietly(bak);
-      } else if (mode === 'installer' && installerLooksComplete(finalDir, type)) {
+        keepVisible = true;
+      } else if (mode === 'installer' && installerOkStampPresent(finalDir)) {
+        // 成功戳在：installer 已完整收尾，只是 settle 标记没清掉
         log.warn(`an earlier installer run of ${name} had finished; kept it and dropped the leftover backup`);
         removeBackupQuietly(bak);
+        keepVisible = true;
       } else {
+        // installer 无成功戳（半成品）或其它失败：有 bak 时优先回滚旧好安装
         fs.rmSync(finalDir, { recursive: true, force: true });
         fs.renameSync(bak, finalDir);
         log.warn(`recovered the previous ${name} after an interrupted install`);
+        // 回滚后的旧装同样必须对 registry 可见
+        keepVisible = true;
       }
-    } else if (mode === 'installer' && fs.existsSync(finalDir) && installerLooksComplete(finalDir, type)) {
-      // 首次 installer（无 bak）在成功与 settle 之间被打断：finalDir 已是完好新装，
-      // 绝不能按 replacing:false 半成品路径删掉——否则下次 use/install 把刚装好的 Miniconda 清掉
+    } else if (mode === 'installer' && fs.existsSync(finalDir) && installerOkStampPresent(finalDir)) {
+      // 首次 installer（无 bak）在成功戳写入之后、settle 之前被打断：保留完好新装
       log.warn(`an earlier installer run of ${name} had finished; kept the installed directory`);
+      keepVisible = true;
     } else if (fs.existsSync(finalDir) && (replacing || legacy)) {
       // 换位从未发生（或旧格式无法判断）：finalDir 是完好的旧版本，只清标记
       log.warn(`an earlier install of ${name} was interrupted before it made changes; kept the existing directory`);
+      keepVisible = true;
     } else {
       fs.rmSync(finalDir, { recursive: true, force: true });
       log.warn(`removed the interrupted install of ${name}; reinstalling`);
     }
-    fs.rmSync(incomplete, { force: true });
+    if (keepVisible) {
+      // settled 后再删：删失败时 registry 仍认 settled，不会把完好安装藏起来
+      settleMarkerQuietly(incomplete, mode ?? 'archive');
+    } else {
+      try {
+        fs.rmSync(incomplete, { force: true });
+      } catch {
+        // 半成品已删、标记留着：下次扫到无 finalDir 的标记会再走清理
+      }
+    }
   } catch (err) {
     log.warn(`could not clean up the interrupted install of ${name}: ${(err as Error).message}`);
   }
@@ -203,6 +228,24 @@ function settleIncompleteMarker(
       // 删不掉只能留下，下次恢复时清理
     }
   }
+}
+
+/** 该类型安装根下是否还有待 recover 的 .incomplete / 孤儿 .bak（只读探测，供早退前判断） */
+export function hasInterruptedResidue(type: SdkTypeId): boolean {
+  const root = paths.sdks(type);
+  let names: string[];
+  try {
+    names = fs.readdirSync(root);
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    if (name.endsWith('.incomplete')) return true;
+    if (!name.endsWith('.bak')) continue;
+    const finalDir = path.join(root, name.slice(0, -'.bak'.length));
+    if (!fs.existsSync(finalDir) && !fs.existsSync(`${finalDir}.incomplete`)) return true;
+  }
+  return false;
 }
 
 /**
@@ -413,8 +456,13 @@ export async function installCommand(
   const prefetched = await preflightChecksum(artifact, strict);
 
   // 咨询式预检（只读）：已安装且无中断标记就别白下载。
-  // 竞态窗口内另一进程可能正在装同一版本，锁内还有权威检查兜底
+  // 竞态窗口内另一进程可能正在装同一版本，锁内还有权威检查兜底。
+  // 但同类型其它版本的 .incomplete / 孤儿 .bak 仍要清：否则只对已装版本
+  // 再 install 早退时，中断残留会永远躲在 registry 后面
   if (!opts.force && fs.existsSync(finalDir) && !fs.existsSync(`${finalDir}.incomplete`)) {
+    if (hasInterruptedResidue(type)) {
+      await withLock(async () => recoverInterruptedInstalls(type), { waitMs: LOCK_WAIT_MS });
+    }
     reportAlreadyInstalled();
     return;
   }
@@ -519,6 +567,8 @@ export async function installCommand(
                 hint: `expected the prefix itself, found ${normalized.root}`,
               });
             }
+            // 成功戳先于 settle：中断窗口内恢复认戳，不认裸 bin（半成品常已有 conda）
+            writeInstallerOkStamp(finalDir);
             // 成功路径的标记删除也可能失败（杀软）：绝不能让一次成功安装报错
             settleMarkerQuietly(incomplete, 'installer');
             removeBackupQuietly(bak);

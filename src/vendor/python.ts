@@ -259,11 +259,13 @@ export const cpythonVendor: Vendor = {
     const forPlatform = filesFor(files, platform);
     const target = pickPythonVersion(versionsDesc(forPlatform), spec);
     if (!target) {
-      const existsElsewhere = pickPythonVersion(versionsDesc(anywhere), spec);
-      if (!existsElsewhere && spec.kind === 'full') {
+      // 最新 snapshot 里本平台没有、别的平台有时，仍要查历史 tag：
+      // mac 缺的 3.10.x 往往还在更早的 PBS release 里
+      if (spec.kind === 'full') {
         const fromTag = await resolveFromRecentTag(spec, platform);
         if (fromTag) return fromTag;
       }
+      const existsElsewhere = pickPythonVersion(versionsDesc(anywhere), spec);
       if (existsElsewhere) {
         throw new SdkvmError(
           `No Python ${formatPythonVersion(existsElsewhere)} archive for ${platform.os}/${platform.arch}`,

@@ -109,9 +109,19 @@ describe('temurin', () => {
     expect(a.checksum && 'url' in a.checksum ? a.checksum.url : '').not.toContain('.json');
   });
 
-  it('keeps X.0.0 uncollapsed in the asset file name', async () => {
-    const a = await temurinVendor.resolve({ kind: 'full', version: '21.0.0' }, MAC);
-    expect(a.downloadUrl).toContain('OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.0.tar.gz');
+  it('keeps X.0.0 uncollapsed when +build is present', async () => {
+    const a = await temurinVendor.resolve({ kind: 'full', version: '21.0.0+35' }, MAC);
+    expect(a.downloadUrl).toContain('OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.0_35.tar.gz');
+    expect(a.downloadUrl).toContain('jdk-21.0.0%2B35');
+  });
+
+  it('rejects full versions without +build (would 404)', async () => {
+    await expect(temurinVendor.resolve({ kind: 'full', version: '21.0.0' }, MAC)).rejects.toThrow(
+      /needs a "\+build" segment/,
+    );
+    await expect(temurinVendor.resolve({ kind: 'full', version: '21.0.5' }, MAC)).rejects.toThrow(
+      /needs a "\+build" segment/,
+    );
   });
 
   it('rejects JDK 8 full versions that cannot name a real asset', async () => {

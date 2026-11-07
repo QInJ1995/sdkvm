@@ -191,6 +191,29 @@ function stealRcLock(lockDir: string): boolean {
  *  短宽限期后再偷，避免两个并发 use 互相拆掉对方刚建的空锁目录 */
 const RC_ORPHAN_GRACE_MS = 2_000;
 
+/** 清掉死进程留下的 `.sdkvm-lock.stale-<pid>` / `.rel-<pid>`（rm 失败或死在 rename 与 rm 之间） */
+function sweepRcLockStaging(lockDir: string): void {
+  const dir = path.dirname(lockDir);
+  const base = path.basename(lockDir);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const at = name.lastIndexOf('.stale-') !== -1 ? name.lastIndexOf('.stale-') : name.lastIndexOf('.rel-');
+    if (at === -1 || !name.startsWith(base) || !/^\.(stale|rel)-\d+$/.test(name.slice(at))) continue;
+    const pid = Number(name.slice(at).split('-')[1]);
+    if (Number.isInteger(pid) && isProcessAlive(pid)) continue;
+    try {
+      fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch {
+      // 清不掉就留着，不影响本次持锁
+    }
+  }
+}
+
 /** 不同 SDKVM_HOME 的锁互不相干，却可能写同一份 rc。用目标文件旁的目录锁串行化读-改-写。 */
 function withRcFileLock(file: string, fn: () => void): void {
   const lockDir = `${file}.sdkvm-lock`;
@@ -202,9 +225,14 @@ function withRcFileLock(file: string, fn: () => void): void {
     try {
       fs.mkdirSync(lockDir);
       try {
-        // pid 落盘后释放才能核对归属；写失败必须回滚目录，否则留下无主锁
-        fs.writeFileSync(path.join(lockDir, 'pid'), `${process.pid}\n`);
+        // wx：独占声明持有。orphan 宽限后别人可能已 steal+重建同一路径；
+        // 非独占 write 会盖掉对方 pid，两边复核都通过 → 双持锁交错 RMW。
+        // EEXIST 说明目录里已有别人的声明——绝不能 rm 整个 lockDir
+        fs.writeFileSync(path.join(lockDir, 'pid'), `${process.pid}\n`, { flag: 'wx' });
       } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+          continue;
+        }
         try {
           fs.rmSync(lockDir, { recursive: true, force: true });
         } catch {
@@ -212,17 +240,21 @@ function withRcFileLock(file: string, fn: () => void): void {
         }
         throw err;
       }
+      // 写完立刻复核：steal 窗口里目录可能已被换走再重建
+      if (readRcLockPid(lockDir) !== process.pid) {
+        continue;
+      }
+      sweepRcLockStaging(lockDir);
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       const holder = readRcLockPid(lockDir);
       let stale = holder != null && !isProcessAlive(holder);
-      if (!stale) {
+      if (!stale && holder == null) {
+        // 只对无主锁（mkdir 与写 pid 之间）按短宽限期偷；
+        // 活持有者绝不按龄偷——rc 写无心跳，30s 龄偷会让多 SDKVM_HOME 并发写坏同一份 rc
         try {
-          const age = Date.now() - fs.statSync(lockDir).mtimeMs;
-          // holder 未知：只等短宽限期（创建者已死 vs 还在写 pid）；
-          // holder 存活：目录超 30s 无心跳才按卡住处理
-          stale = holder == null ? age > RC_ORPHAN_GRACE_MS : age > 30_000;
+          stale = Date.now() - fs.statSync(lockDir).mtimeMs > RC_ORPHAN_GRACE_MS;
         } catch {
           continue; // 锁目录恰好消失：直接重取
         }
@@ -269,23 +301,20 @@ function resolveRcWriteTarget(file: string): string {
   // 脱离用户的 dotfile 管理。写透到链接目标（读侧 readFileSync 本来就跟随链接）。
   // 悬空链接 realpathSync 会抛——被吞后按原路径 rename 会顶掉链接；逐层 readlink
   // 拼出目标路径，即使目标尚未创建也写到那里（与 mrm writeSettings 同款）
-  try {
-    let cur = file;
-    for (let hops = 0; hops < 8; hops++) {
-      let st: fs.Stats;
-      try {
-        st = fs.lstatSync(cur);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return cur;
-        throw err;
-      }
-      if (!st.isSymbolicLink()) return cur;
-      cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
+  let cur = file;
+  for (let hops = 0; hops < 8; hops++) {
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(cur);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return cur;
+      throw err;
     }
-    return cur;
-  } catch {
-    return file;
+    if (!st.isSymbolicLink()) return cur;
+    cur = path.resolve(path.dirname(cur), fs.readlinkSync(cur));
   }
+  // 达上限仍是链接：绝不能对 symlink 路径 rename（会把链接顶成普通文件）
+  throw new Error(`too many levels of symbolic links while resolving ${file}`);
 }
 
 /** 原子写 rc：tmp+rename，避免 O_TRUNC 直接写在写一半崩溃时截断用户文件 */
@@ -313,6 +342,43 @@ function writeRcAtomic(file: string, content: string): void {
   }
 }
 
+const RC_TOUCHED_CAP = 64;
+
+/** 记下写过的 rc 绝对路径，供卸载扫历史 XDG / 换过的 fish 配置 */
+function rememberRcPath(file: string): void {
+  try {
+    const abs = path.resolve(file);
+    fs.mkdirSync(paths.root(), { recursive: true });
+    const store = paths.rcTouched();
+    let list: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(store, 'utf8'));
+      if (Array.isArray(parsed)) {
+        list = parsed.filter((x): x is string => typeof x === 'string');
+      }
+    } catch {
+      // 损坏或首次：从空列表重建
+    }
+    if (list.includes(abs)) return;
+    list.push(abs);
+    if (list.length > RC_TOUCHED_CAP) list = list.slice(-RC_TOUCHED_CAP);
+    fs.writeFileSync(store, `${JSON.stringify(list)}\n`);
+  } catch {
+    // 记不住不影响本次写入；最坏卸载扫不全历史路径
+  }
+}
+
+/** 卸载时与 rcCandidates 合并：覆盖曾经写过、当前环境变量已变的路径 */
+export function rememberedRcPaths(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(paths.rcTouched(), 'utf8'));
+    if (!Array.isArray(parsed)) return [];
+    return [...new Set(parsed.filter((x): x is string => typeof x === 'string'))];
+  } catch {
+    return [];
+  }
+}
+
 /** 写入 rc 文件（不存在则创建）。非 UTF-8 内容先备份，避免替换字符写回造成永久破坏 */
 export function upsertRcFile(file: string, type: SdkTypeId, blockText?: string): void {
   withRcFileLock(file, () => upsertRcFileUnlocked(file, type, blockText));
@@ -324,16 +390,20 @@ function upsertRcFileUnlocked(file: string, type: SdkTypeId, blockText?: string)
     // 首次创建同样走 tmp+rename：writeFileSync 写到一半崩溃会留下半截 rc，
     // 下次会被当成合法 UTF-8 保留
     writeRcAtomic(file, upsertRcContent('', type, blockText));
+    rememberRcPath(file);
     return;
   }
   const raw = fs.readFileSync(file);
   const content = raw.toString('utf8');
   if (!Buffer.from(content, 'utf8').equals(raw)) {
-    const bak = `${file}.sdkvm-bak`;
+    // 备份写在真实目标旁（与 writeRcAtomic 同路径），别把 bak 甩在 symlink 旁边
+    const target = resolveRcWriteTarget(file);
+    const bak = `${target}.sdkvm-bak`;
     fs.copyFileSync(file, bak);
     log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
   }
   writeRcAtomic(file, upsertRcContent(content, type, blockText));
+  rememberRcPath(file);
 }
 
 export function removeRcBlockFromFile(file: string, type: SdkTypeId): void {
@@ -348,7 +418,8 @@ function removeRcBlockFromFileUnlocked(file: string, type: SdkTypeId): void {
   if (stripped === content) return;
   // 与 upsertRcFile 相同的保护：非 UTF-8 字节先备份再写回
   if (!Buffer.from(content, 'utf8').equals(raw)) {
-    const bak = `${file}.sdkvm-bak`;
+    const target = resolveRcWriteTarget(file);
+    const bak = `${target}.sdkvm-bak`;
     fs.copyFileSync(file, bak);
     log.warn(`${file} is not valid UTF-8; original backed up to ${bak}`);
   }

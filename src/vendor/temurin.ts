@@ -107,6 +107,13 @@ function githubAssetUrl(version: string, os: string, arch: string): string {
       hint: 'Use e.g. 8.0.504+6 (see https://github.com/adoptium/temurin8-binaries/tags), or "sdkvm java install 8" for the latest 8',
     });
   }
+  // 现代 major 的真实 tag/文件是 jdk-21.0.5+11 / ..._21.0.5_11：缺 +build 会拼出必 404 的 URL
+  if (v.build == null) {
+    const base = [v.major, v.minor ?? 0, v.patch ?? 0].join('.');
+    throw new SdkvmError(`Temurin version needs a "+build" segment, got "${version}"`, {
+      hint: `Use e.g. ${base}+11 (see https://github.com/adoptium/temurin${v.major}-binaries/tags), or install the line: sdkvm java install ${v.major}`,
+    });
+  }
   const major = v.major;
   // 文件名直接用用户输入的版本正文：formatVersion 会把 21.0.0 折叠成 21，拼出错URL
   const underscored = version.replace('+', '_');

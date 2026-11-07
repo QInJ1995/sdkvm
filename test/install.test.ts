@@ -3,8 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { downloadDestName, recoverInterruptedInstalls, sweepStaleParts, sweepStaleTmp } from '../src/cli/install.js';
+import {
+  downloadDestName,
+  hasInterruptedResidue,
+  recoverInterruptedInstalls,
+  sweepStaleParts,
+  sweepStaleTmp,
+} from '../src/cli/install.js';
 import { detectPlatform } from '../src/core/platform.js';
+import { listInstalled } from '../src/core/registry.js';
 
 let home: string;
 
@@ -30,6 +37,27 @@ function writeMarker(finalDir: string, body: string): string {
   fs.writeFileSync(marker, body);
   return marker;
 }
+
+describe('hasInterruptedResidue', () => {
+  it('已装完好时同类型孤儿 bak / incomplete 仍被探测到（供 already-installed 早退前 recover）', () => {
+    goDir('golang-1.24.5');
+    expect(hasInterruptedResidue('go')).toBe(false);
+
+    const bak = goDir('golang-1.25.1.bak');
+    fs.writeFileSync(path.join(bak, 'go.bin'), 'good');
+    expect(hasInterruptedResidue('go')).toBe(true);
+
+    recoverInterruptedInstalls('go');
+    expect(hasInterruptedResidue('go')).toBe(false);
+    expect(fs.existsSync(path.join(home, 'gos', 'golang-1.25.1'))).toBe(true);
+  });
+
+  it('仅有 incomplete 标记时也算有残留', () => {
+    const dir = goDir('golang-1.23.4');
+    writeMarker(dir, JSON.stringify({ startedAt: 1, replacing: false }));
+    expect(hasInterruptedResidue('go')).toBe(true);
+  });
+});
 
 describe('recoverInterruptedInstalls', () => {
   it('标记 replacing:true 且无 bak：换位从未发生，完好目录保留、只清标记', () => {
@@ -183,12 +211,13 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
     expect(fs.existsSync(`${dir}.incomplete`)).toBe(false);
   });
 
-  it('installer 模式 + 可执行文件已就位：保留新装、丢 bak', () => {
+  it('installer 模式 + 成功戳已就位：保留新装、丢 bak', () => {
     const dir = goDir('golang-1.24.5');
     const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
     const bin = path.join(dir, 'bin', binName);
     fs.mkdirSync(path.dirname(bin), { recursive: true });
     fs.writeFileSync(bin, 'new');
+    fs.writeFileSync(path.join(dir, '.sdkvm-installed'), '1\n');
     const bak = goDir('golang-1.24.5.bak');
     fs.writeFileSync(path.join(bak, 'go.bin'), 'old');
     writeMarker(dir, JSON.stringify({ startedAt: 1, replacing: true, mode: 'installer' }));
@@ -200,12 +229,13 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
     expect(fs.existsSync(`${dir}.incomplete`)).toBe(false);
   });
 
-  it('首次 installer（replacing:false、无 bak）成功后 settle 前被打断：保留完好新装', () => {
+  it('首次 installer 有成功戳、settle 前被打断：保留完好新装', () => {
     const dir = goDir('golang-1.24.5');
     const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
     const bin = path.join(dir, 'bin', binName);
     fs.mkdirSync(path.dirname(bin), { recursive: true });
     fs.writeFileSync(bin, 'fresh');
+    fs.writeFileSync(path.join(dir, '.sdkvm-installed'), '1\n');
     const marker = writeMarker(
       dir,
       JSON.stringify({ startedAt: 1, replacing: false, mode: 'installer' }),
@@ -213,13 +243,44 @@ describe('recoverInterruptedInstalls 标记的 mode/settled 语义', () => {
 
     recoverInterruptedInstalls('go');
 
-    // 旧逻辑会按半成品删掉 finalDir；installer 已落盘可执行文件时必须保留
     expect(fs.existsSync(dir)).toBe(true);
     expect(fs.readFileSync(bin, 'utf8')).toBe('fresh');
-    expect(fs.existsSync(marker)).toBe(false);
+    if (fs.existsSync(marker)) {
+      expect(JSON.parse(fs.readFileSync(marker, 'utf8')).settled).toBe(true);
+    }
+    expect(listInstalled('go').some((j) => j.dirPath === dir)).toBe(true);
   });
 
-  it('installer 模式 + bak + finalDir 并存：安装器直接写目录没有原子性，仍回滚旧版', () => {
+  it('installer 半成品仅有 bin、无成功戳：有 bak 时回滚旧版（不认裸 bin）', () => {
+    const dir = goDir('golang-1.24.5');
+    const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
+    const bin = path.join(dir, 'bin', binName);
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, 'half');
+    const bak = goDir('golang-1.24.5.bak');
+    fs.writeFileSync(path.join(bak, 'go.bin'), 'good');
+    writeMarker(dir, JSON.stringify({ startedAt: 1, replacing: true, mode: 'installer' }));
+
+    recoverInterruptedInstalls('go');
+
+    expect(fs.readFileSync(path.join(dir, 'go.bin'), 'utf8')).toBe('good');
+    expect(fs.existsSync(bak)).toBe(false);
+  });
+
+  it('installer 半成品仅有 bin、无成功戳、无 bak：删掉半成品', () => {
+    const dir = goDir('golang-1.23.4');
+    const binName = detectPlatform().os === 'windows' ? 'go.exe' : 'go';
+    const bin = path.join(dir, 'bin', binName);
+    fs.mkdirSync(path.dirname(bin), { recursive: true });
+    fs.writeFileSync(bin, 'half');
+    writeMarker(dir, JSON.stringify({ startedAt: 1, replacing: false, mode: 'installer' }));
+
+    recoverInterruptedInstalls('go');
+
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it('installer 模式 + bak + finalDir 并存且无成功戳：回滚旧版', () => {
     const dir = goDir('golang-1.24.5');
     fs.writeFileSync(path.join(dir, 'half'), 'broken');
     const bak = goDir('golang-1.24.5.bak');

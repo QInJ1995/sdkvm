@@ -11,7 +11,7 @@ import { setCurrent } from '../fs/link.js';
 import { getSdkType } from '../sdk/index.js';
 import { recoverInterruptedInstalls } from './install.js';
 import type { SdkTypeId } from '../sdk/types.js';
-import { detectRcFile } from '../shell/detect.js';
+import { detectRcFile, fishConfigPath } from '../shell/detect.js';
 import { rcBegin, rcBlock, rcBlockFish, upsertRcFile } from '../shell/rc.js';
 import { ensureUserPathWin, setSdkEnvWin, sdkPathEntries, getEnvWin } from '../shell/winenv.js';
 import { log } from '../ui/log.js';
@@ -86,10 +86,8 @@ export async function useCommand(
     } else {
       const fish = isFishShell();
       // fish 的 config.fish 语法不同，不能写 bash 块。以前 detectRcFile 对 fish 返回 null，
-      // 提示却写成“无法识别 shell”，PATH 也不会自动生效
-      rc = fish
-        ? path.join(os.homedir(), '.config', 'fish', 'config.fish')
-        : detectRcFile(platform.os);
+      // 提示却写成“无法识别 shell”，PATH 也不会自动生效。路径必须认 XDG_CONFIG_HOME
+      rc = fish ? fishConfigPath() : detectRcFile(platform.os);
       if (rc) {
         try {
           upsertRcFile(rc, type, fish ? rcBlockFish(type) : undefined);

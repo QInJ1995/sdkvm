@@ -1,6 +1,17 @@
 import os from 'node:os';
 import path from 'node:path';
 
+/**
+ * fish 实际读取的 config 路径。优先 `$XDG_CONFIG_HOME/fish/config.fish`，
+ * 未设时才是 `~/.config/fish/config.fish`。写死 ~/.config 会让设了 XDG 的用户
+ * PATH 块写到 fish 不读的文件里。
+ */
+export function fishConfigPath(): string {
+  const xdg = (process.env.XDG_CONFIG_HOME ?? '').trim();
+  const base = xdg || path.join(os.homedir(), '.config');
+  return path.join(base, 'fish', 'config.fish');
+}
+
 /** $SHELL → rc 文件。返回 null 表示无法自动判断（打印手动配置片段） */
 export function detectRcFile(platform: 'mac' | 'linux' | 'windows'): string | null {
   if (platform === 'windows') return null;
@@ -12,7 +23,8 @@ export function detectRcFile(platform: 'mac' | 'linux' | 'windows'): string | nu
     // macOS Terminal 默认 login shell 读 .bash_profile；Linux 交互 shell 读 .bashrc
     return platform === 'mac' ? path.join(home, '.bash_profile') : path.join(home, '.bashrc');
   }
-  if (base === 'fish') return null; // fish 语法不同，打印手动片段
+  // fish 语法不同，不能写 bash 块；由 use.ts 走 fishConfigPath + rcBlockFish
+  if (base === 'fish') return null;
   return null;
 }
 
@@ -22,11 +34,13 @@ export function detectRcFile(platform: 'mac' | 'linux' | 'windows'): string | nu
 export function rcCandidates(platform: 'mac' | 'linux' | 'windows'): string[] {
   if (platform === 'windows') return [];
   const home = os.homedir();
+  // fish：当前 XDG 路径 + 默认 ~/.config（用户改过 XDG_CONFIG_HOME 时两边都可能有块）
+  const fishPaths = [...new Set([fishConfigPath(), path.join(home, '.config', 'fish', 'config.fish')])];
   return [
     path.join(home, '.zshrc'),
     path.join(home, '.bashrc'),
     path.join(home, '.bash_profile'),
     path.join(home, '.profile'),
-    path.join(home, '.config', 'fish', 'config.fish'),
+    ...fishPaths,
   ];
 }

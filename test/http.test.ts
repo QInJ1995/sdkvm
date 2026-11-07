@@ -260,4 +260,37 @@ describe('显式代理环境变量走 undici per-request dispatcher', () => {
       vi.resetModules();
     }
   });
+
+  it('代理环境变化时按指纹重建 Agent（不粘住旧单例）', async () => {
+    const agentOpts: unknown[] = [];
+    vi.doMock('undici', async (importOriginal) => {
+      const orig = await importOriginal<typeof import('undici')>();
+      return {
+        ...orig,
+        EnvHttpProxyAgent: class {
+          constructor(opts: unknown) {
+            agentOpts.push(opts);
+          }
+        },
+        fetch: vi.fn(async () => new Response('ok')),
+      };
+    });
+    vi.resetModules();
+    try {
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:1111';
+      const { httpText } = await import('../src/net/http.js');
+      await httpText('https://proxy-finger-1.example/x');
+      expect(agentOpts).toHaveLength(1);
+      expect(agentOpts[0]).toMatchObject({ httpsProxy: 'http://127.0.0.1:1111' });
+
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:2222';
+      await httpText('https://proxy-finger-2.example/x');
+      expect(agentOpts).toHaveLength(2);
+      expect(agentOpts[1]).toMatchObject({ httpsProxy: 'http://127.0.0.1:2222' });
+    } finally {
+      delete process.env.HTTPS_PROXY;
+      vi.doUnmock('undici');
+      vi.resetModules();
+    }
+  });
 });
